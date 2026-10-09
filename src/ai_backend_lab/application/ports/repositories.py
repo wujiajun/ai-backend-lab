@@ -1,0 +1,16 @@
+from typing import Protocol
+
+from ai_backend_lab.application.queries import OrderQuery
+from ai_backend_lab.domain.models import Order
+
+
+class OrderRepository(Protocol):
+    def find_by_id(self, order_id: int) -> Order | None: ...
+
+    def find_by_order_number(self, order_number: str) -> Order | None: ...
+
+    def find(self, order_query: OrderQuery) -> list[Order]: ...
+
+    def add(self, order: Order) -> None: ...
+
+    def update(self, order: Order) -> None: ...
