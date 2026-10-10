@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import ValidationError
@@ -19,9 +20,19 @@ from ai_backend_lab.application.services import (
 )
 
 
+@dataclass(frozen=True)
+class AgentToolPolicy:
+    parallel_safe: bool = False
+
+
 class AgentTool(Protocol):
     @property
     def definition(self) -> LLMToolDefinition: ...
+
+    @property
+    def policy(
+        self,
+    ) -> AgentToolPolicy: ...
 
     async def execute(
         self,
@@ -39,6 +50,14 @@ class GetOrderTool:
     @property
     def definition(self) -> LLMToolDefinition:
         return GET_ORDER_TOOL
+
+    @property
+    def policy(
+        self,
+    ) -> AgentToolPolicy:
+        return AgentToolPolicy(
+            parallel_safe=False,
+        )
 
     async def execute(
         self,
