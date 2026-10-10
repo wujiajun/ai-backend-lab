@@ -20,6 +20,7 @@ from ai_backend_lab.application.ports.llm import (
     LLMRole,
     LLMToolOutput,
 )
+from ai_backend_lab.application.order_agent.exceptions import AgentMaxStepsExceededError
 
 
 class OrderAgentService:
@@ -28,10 +29,14 @@ class OrderAgentService:
         llm: LLMGateway,
         registry: ToolRegistry,
         executor: ToolExecutor,
+        max_steps: int,
     ) -> None:
+        if max_steps < 1:
+            raise ValueError("max_steps must be at least 1.")
         self._llm = llm
         self._registry = registry
         self._executor = executor
+        self._max_steps = max_steps
 
     async def run(
         self,
@@ -55,6 +60,11 @@ class OrderAgentService:
                 return AgentResult(
                     answer=result.text,
                     steps=len(state.steps),
+                )
+            if len(state.steps) >= self._max_steps:
+                raise AgentMaxStepsExceededError(
+                    "Agent exceeded the maximum "
+                    f"number of tool steps: {self._max_steps}."
                 )
 
             if result.continuation_id is None:

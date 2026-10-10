@@ -1,0 +1,2 @@
+class AgentMaxStepsExceededError(Exception):
+    pass

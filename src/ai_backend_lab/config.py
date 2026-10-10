@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_max_attempts: int = 2
     llm_retry_initial_wait: float = 0.5
     llm_retry_max_wait: float = 4.0
+    agent_max_steps: int = 6
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
