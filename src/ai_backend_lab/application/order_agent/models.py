@@ -18,7 +18,6 @@ class AgentState:
     user_message: str
     steps: list[AgentStep] = field(default_factory=list)
     continuation_id: str | None = None
-    final_answer: str | None = None
 
 
 @dataclass(frozen=True)
