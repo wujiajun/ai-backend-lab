@@ -1,6 +1,7 @@
 from ai_backend_lab.application.exceptions import (
     LLMOutputError,
 )
+from ai_backend_lab.application.order_agent.exceptions import AgentMaxStepsExceededError
 from ai_backend_lab.application.order_agent.executor import (
     ToolExecutor,
 )
@@ -20,7 +21,6 @@ from ai_backend_lab.application.ports.llm import (
     LLMRole,
     LLMToolOutput,
 )
-from ai_backend_lab.application.order_agent.exceptions import AgentMaxStepsExceededError
 
 
 class OrderAgentService:
