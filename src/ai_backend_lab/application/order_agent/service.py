@@ -11,6 +11,7 @@ from ai_backend_lab.application.order_agent.models import (
     AgentRunResult,
     AgentState,
     AgentStep,
+    ConversationState,
 )
 from ai_backend_lab.application.order_agent.prompts import ORDER_AGENT_INSTRUCTIONS
 from ai_backend_lab.application.order_agent.registry import (
@@ -43,9 +44,13 @@ class OrderAgentService:
     async def run(
         self,
         user_message: str,
+        conversation: ConversationState | None = None,
     ) -> AgentRunResult:
+        if conversation is None:
+            conversation = ConversationState()
         state = AgentState(
             user_message=user_message,
+            conversation=conversation,
         )
 
         return await self._continue(
@@ -96,10 +101,11 @@ class OrderAgentService:
             return LLMRequest(
                 instructions=ORDER_AGENT_INSTRUCTIONS,
                 messages=[
+                    *state.conversation.messages,
                     LLMMessage(
                         role=LLMRole.USER,
                         content=state.user_message,
-                    )
+                    ),
                 ],
                 tools=self._registry.definitions(),
             )
@@ -126,9 +132,16 @@ class OrderAgentService:
 
             # No tool call means the model has finished.
             if not result.tool_calls:
+                state.conversation.messages.extend(
+                    [
+                        LLMMessage(role=LLMRole.USER, content=state.user_message),
+                        LLMMessage(role=LLMRole.ASSISTANT, content=result.text),
+                    ]
+                )
                 return AgentResult(
                     answer=result.text,
                     steps=len(state.steps),
+                    conversation=state.conversation,
                 )
 
             # The model wants another tool step,
