@@ -19,13 +19,41 @@ class AgentStep:
     tool_outputs: list[LLMToolOutput] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class AgentStepTrace:
+    step_number: int
+    llm_duration_ms: float
+
+    tool_names: list[str] = field(default_factory=list)
+
+    tool_duration_ms: float | None = None
+
+
+@dataclass
+class AgentTrace:
+    llm_calls: int = 0
+    tool_calls: int = 0
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    steps: list[AgentStepTrace] = field(default_factory=list)
+
+
 @dataclass
 class AgentState:
     user_message: str
     conversation: ConversationState
+
     steps: list[AgentStep] = field(default_factory=list)
+
     continuation_id: str | None = None
+
     pending_tool_calls: list[LLMToolCall] = field(default_factory=list)
+
+    pending_llm_duration_ms: float | None = None
+
+    trace: AgentTrace = field(default_factory=AgentTrace)
 
 
 @dataclass(frozen=True)
@@ -33,6 +61,7 @@ class AgentResult:
     answer: str
     steps: int
     conversation: ConversationState
+    trace: AgentTrace
 
 
 @dataclass(frozen=True)

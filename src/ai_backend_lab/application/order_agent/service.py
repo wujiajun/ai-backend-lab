@@ -1,4 +1,6 @@
+import logging
 from collections.abc import AsyncIterator
+from time import perf_counter
 
 from ai_backend_lab.application.exceptions import (
     LLMOutputError,
@@ -18,6 +20,7 @@ from ai_backend_lab.application.order_agent.models import (
     AgentStartedEvent,
     AgentState,
     AgentStep,
+    AgentStepTrace,
     AgentToolCalledEvent,
     AgentToolCompletedEvent,
     ConversationState,
@@ -30,9 +33,13 @@ from ai_backend_lab.application.ports.llm import (
     LLMGateway,
     LLMMessage,
     LLMRequest,
+    LLMResult,
     LLMRole,
+    LLMToolCall,
     LLMToolOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OrderAgentService:
@@ -85,20 +92,31 @@ class OrderAgentService:
         if approval_requests:
             return AgentApprovalResult(state=state, requests=approval_requests)
 
+        if state.pending_llm_duration_ms is None:
+            raise ValueError("Agent state has no pending LLM duration.")
+
+        tool_calls = state.pending_tool_calls
+
+        tool_started = perf_counter()
+
         tool_outputs = await self._executor.execute_resolved(
-            tool_calls=state.pending_tool_calls,
+            tool_calls=tool_calls,
             approved_call_ids=approved_call_ids,
             rejected_call_ids=rejected_call_ids,
         )
-        step = AgentStep(
-            number=len(state.steps) + 1,
-            tool_calls=state.pending_tool_calls,
-        )
-        step.tool_outputs.extend(tool_outputs)
 
-        state.steps.append(step)
+        tool_duration_ms = (perf_counter() - tool_started) * 1000
+
+        self._record_completed_tool_step(
+            state=state,
+            tool_calls=tool_calls,
+            tool_outputs=tool_outputs,
+            llm_duration_ms=(state.pending_llm_duration_ms),
+            tool_duration_ms=tool_duration_ms,
+        )
 
         state.pending_tool_calls = []
+        state.pending_llm_duration_ms = None
         return await self._continue(state, pending_tool_outputs=tool_outputs)
 
     async def stream(
@@ -133,26 +151,16 @@ class OrderAgentService:
                 tool_outputs=pending_tool_outputs,
             )
 
-            result = await self._llm.generate(request)
+            result, llm_duration_ms = await self._generate_with_trace(
+                state=state,
+                request=request,
+            )
             state.continuation_id = result.continuation_id
 
             if not result.tool_calls:
-                state.conversation.messages.extend(
-                    [
-                        LLMMessage(
-                            role=LLMRole.USER,
-                            content=state.user_message,
-                        ),
-                        LLMMessage(
-                            role=LLMRole.ASSISTANT,
-                            content=result.text,
-                        ),
-                    ]
-                )
-                agent_result = AgentResult(
+                agent_result = self._complete(
+                    state=state,
                     answer=result.text,
-                    steps=len(state.steps),
-                    conversation=state.conversation,
                 )
                 yield AgentAnswerEvent(
                     answer=result.text,
@@ -188,24 +196,31 @@ class OrderAgentService:
 
             if approval_requests:
                 state.pending_tool_calls = result.tool_calls
+                state.pending_llm_duration_ms = llm_duration_ms
                 yield AgentApprovalRequiredEvent(
                     requests=approval_requests,
                 )
                 return
 
+            tool_started = perf_counter()
+
             tool_outputs = await self._executor.execute_all(result.tool_calls)
+
+            tool_duration_ms = (perf_counter() - tool_started) * 1000
+
             for output in tool_outputs:
                 yield AgentToolCompletedEvent(
                     call_id=output.call_id, output=output.output
                 )
 
-            step = AgentStep(
-                number=len(state.steps) + 1,
+            self._record_completed_tool_step(
+                state=state,
                 tool_calls=result.tool_calls,
+                tool_outputs=tool_outputs,
+                llm_duration_ms=llm_duration_ms,
+                tool_duration_ms=tool_duration_ms,
             )
 
-            step.tool_outputs.extend(tool_outputs)
-            state.steps.append(step)
             pending_tool_outputs = tool_outputs
 
     def _build_request(
@@ -242,22 +257,17 @@ class OrderAgentService:
                 state,
                 pending_tool_outputs,
             )
-
-            result = await self._llm.generate(request)
+            result, llm_duration_ms = await self._generate_with_trace(
+                state=state,
+                request=request,
+            )
             state.continuation_id = result.continuation_id
 
             # No tool call means the model has finished.
             if not result.tool_calls:
-                state.conversation.messages.extend(
-                    [
-                        LLMMessage(role=LLMRole.USER, content=state.user_message),
-                        LLMMessage(role=LLMRole.ASSISTANT, content=result.text),
-                    ]
-                )
-                return AgentResult(
+                return self._complete(
+                    state=state,
                     answer=result.text,
-                    steps=len(state.steps),
-                    conversation=state.conversation,
                 )
 
             # The model wants another tool step,
@@ -283,18 +293,124 @@ class OrderAgentService:
             # until all required approvals are granted.
             if approval_requests:
                 state.pending_tool_calls = result.tool_calls
+                state.pending_llm_duration_ms = llm_duration_ms
                 return AgentApprovalResult(
                     state=state,
                     requests=approval_requests,
                 )
 
+            tool_started = perf_counter()
             tool_outputs = await self._executor.execute_all(result.tool_calls)
+            tool_duration_ms = (perf_counter() - tool_started) * 1000
 
-            step = AgentStep(
-                number=len(state.steps) + 1,
+            self._record_completed_tool_step(
+                state=state,
                 tool_calls=result.tool_calls,
+                tool_outputs=tool_outputs,
+                llm_duration_ms=llm_duration_ms,
+                tool_duration_ms=tool_duration_ms,
             )
-            step.tool_outputs.extend(tool_outputs)
-            state.steps.append(step)
 
             pending_tool_outputs = tool_outputs
+
+    def _record_llm_usage(
+        self,
+        state: AgentState,
+        result: LLMResult,
+    ) -> None:
+        state.trace.llm_calls += 1
+
+        if result.usage is None:
+            return
+
+        state.trace.input_tokens += result.usage.input_tokens
+        state.trace.output_tokens += result.usage.output_tokens
+
+    def _record_completed_tool_step(
+        self,
+        state: AgentState,
+        tool_calls: list[LLMToolCall],
+        tool_outputs: list[LLMToolOutput],
+        llm_duration_ms: float,
+        tool_duration_ms: float,
+    ) -> None:
+        step_number = len(state.steps) + 1
+
+        step = AgentStep(
+            number=step_number,
+            tool_calls=tool_calls,
+        )
+
+        step.tool_outputs.extend(tool_outputs)
+
+        state.steps.append(step)
+
+        state.trace.tool_calls += len(tool_calls)
+
+        state.trace.steps.append(
+            AgentStepTrace(
+                step_number=step_number,
+                llm_duration_ms=llm_duration_ms,
+                tool_names=[tool_call.name for tool_call in tool_calls],
+                tool_duration_ms=tool_duration_ms,
+            )
+        )
+
+    def _complete(
+        self,
+        state: AgentState,
+        answer: str,
+    ) -> AgentResult:
+        state.conversation.messages.extend(
+            [
+                LLMMessage(
+                    role=LLMRole.USER,
+                    content=state.user_message,
+                ),
+                LLMMessage(
+                    role=LLMRole.ASSISTANT,
+                    content=answer,
+                ),
+            ]
+        )
+
+        result = AgentResult(
+            answer=answer,
+            steps=len(state.steps),
+            conversation=state.conversation,
+            trace=state.trace,
+        )
+
+        logger.info(
+            "Agent completed "
+            "steps=%s "
+            "llm_calls=%s "
+            "tool_calls=%s "
+            "input_tokens=%s "
+            "output_tokens=%s",
+            result.steps,
+            state.trace.llm_calls,
+            state.trace.tool_calls,
+            state.trace.input_tokens,
+            state.trace.output_tokens,
+        )
+
+        return result
+
+    async def _generate_with_trace(
+        self,
+        state: AgentState,
+        request: LLMRequest,
+    ) -> tuple[LLMResult, float]:
+        started = perf_counter()
+
+        result = await self._llm.generate(request)
+
+        duration_ms = (perf_counter() - started) * 1000
+
+        self._record_llm_usage(
+            state=state,
+            result=result,
+        )
+
+        return result, duration_ms
