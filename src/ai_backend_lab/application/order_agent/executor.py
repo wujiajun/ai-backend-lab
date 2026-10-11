@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from ai_backend_lab.application.exceptions import (
     LLMOutputError,
@@ -63,6 +64,34 @@ class ToolExecutor:
 
         return True
 
+    async def execute_resolved(
+        self,
+        tool_calls: list[LLMToolCall],
+        approved_call_ids: set[str],
+        rejected_call_ids: set[str],
+    ) -> list[LLMToolOutput]:
+        executable_calls: list[LLMToolCall] = []
+
+        outputs_by_call_id: dict[
+            str,
+            LLMToolOutput,
+        ] = {}
+
+        for tool_call in tool_calls:
+            if tool_call.call_id in rejected_call_ids:
+                outputs_by_call_id[tool_call.call_id] = self._rejection_output(
+                    tool_call
+                )
+            else:
+                executable_calls.append(tool_call)
+
+        executed_outputs = await self.execute_all(executable_calls)
+
+        for output in executed_outputs:
+            outputs_by_call_id[output.call_id] = output
+
+        return [outputs_by_call_id[tool_call.call_id] for tool_call in tool_calls]
+
     async def _execute_sequential(
         self,
         tool_calls: list[LLMToolCall],
@@ -94,6 +123,7 @@ class ToolExecutor:
         self,
         tool_calls: list[LLMToolCall],
         approved_call_ids: set[str],
+        rejected_call_ids: set[str],
     ) -> list[AgentApprovalRequest]:
         requests: list[AgentApprovalRequest] = []
 
@@ -106,6 +136,7 @@ class ToolExecutor:
             if (
                 tool.policy.requires_approval
                 and tool_call.call_id not in approved_call_ids
+                and tool_call.call_id not in rejected_call_ids
             ):
                 requests.append(
                     AgentApprovalRequest(
@@ -116,3 +147,18 @@ class ToolExecutor:
                 )
 
         return requests
+
+    def _rejection_output(
+        self,
+        tool_call: LLMToolCall,
+    ) -> LLMToolOutput:
+        return LLMToolOutput(
+            call_id=tool_call.call_id,
+            output=json.dumps(
+                {
+                    "ok": False,
+                    "error_code": "USER_REJECTED",
+                    "message": ("The user rejected this action."),
+                }
+            ),
+        )

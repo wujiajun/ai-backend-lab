@@ -21,6 +21,10 @@ from ai_backend_lab.application.ports.llm import (
 from ai_backend_lab.application.services import (
     OrderService,
 )
+from ai_backend_lab.domain.exceptions import (
+    OrderCannotBeCancelledError,
+    OrderNotFoundError,
+)
 
 
 @dataclass(frozen=True)
@@ -122,14 +126,30 @@ class CancelOrderTool:
                 "LLM returned invalid cancel_order arguments."
             ) from exc
 
-        order = await asyncio.to_thread(
-            self._order_service.cancel_order,
-            args.order_number,
-        )
+        try:
+            order = await asyncio.to_thread(
+                self._order_service.cancel_order,
+                args.order_number,
+            )
 
-        result = CancelOrderToolOutput(
-            order_number=order.order_number,
-            status=order.status,
-        )
+            result = CancelOrderToolOutput(
+                ok=True,
+                order_number=order.order_number,
+                status=order.status,
+            )
+        except OrderNotFoundError:
+            result = CancelOrderToolOutput(
+                ok=False,
+                order_number=args.order_number,
+                error_code="ORDER_NOT_FOUND",
+                message="The order was not found.",
+            )
+        except OrderCannotBeCancelledError:
+            result = CancelOrderToolOutput(
+                ok=False,
+                order_number=args.order_number,
+                error_code=("ORDER_CANNOT_BE_CANCELLED"),
+                message=("The order cannot be cancelled " "in its current status."),
+            )
 
         return result.model_dump_json()

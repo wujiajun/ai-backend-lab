@@ -57,6 +57,7 @@ class OrderAgentService:
         self,
         state: AgentState,
         approved_call_ids: set[str],
+        rejected_call_ids: set[str],
     ) -> AgentRunResult:
         if not state.pending_tool_calls:
             raise ValueError("Agent state has no pending tool calls.")
@@ -64,12 +65,17 @@ class OrderAgentService:
         approval_requests = self._executor.required_approvals(
             state.pending_tool_calls,
             approved_call_ids,
+            rejected_call_ids,
         )
 
         if approval_requests:
             return AgentApprovalResult(state=state, requests=approval_requests)
 
-        tool_outputs = await self._executor.execute_all(state.pending_tool_calls)
+        tool_outputs = await self._executor.execute_resolved(
+            tool_calls=state.pending_tool_calls,
+            approved_call_ids=approved_call_ids,
+            rejected_call_ids=rejected_call_ids,
+        )
         step = AgentStep(
             number=len(state.steps) + 1,
             tool_calls=state.pending_tool_calls,
@@ -141,6 +147,7 @@ class OrderAgentService:
             approval_requests = self._executor.required_approvals(
                 result.tool_calls,
                 approved_call_ids=set(),
+                rejected_call_ids=set(),
             )
 
             # Do not execute any tool in this batch
