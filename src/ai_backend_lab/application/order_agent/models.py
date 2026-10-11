@@ -49,3 +49,46 @@ class AgentApprovalResult:
 
 
 AgentRunResult = AgentResult | AgentApprovalResult
+
+
+@dataclass(frozen=True)
+class AgentStartedEvent:
+    pass
+
+
+@dataclass(frozen=True)
+class AgentToolCalledEvent:
+    call_id: str
+    tool_name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class AgentToolCompletedEvent:
+    call_id: str
+    output: str
+
+
+@dataclass(frozen=True)
+class AgentApprovalRequiredEvent:
+    requests: list[AgentApprovalRequest]
+
+
+@dataclass(frozen=True)
+class AgentAnswerEvent:
+    answer: str
+
+
+@dataclass(frozen=True)
+class AgentCompletedEvent:
+    result: AgentResult
+
+
+AgentEvent = (
+    AgentStartedEvent
+    | AgentToolCalledEvent
+    | AgentToolCompletedEvent
+    | AgentApprovalRequiredEvent
+    | AgentAnswerEvent
+    | AgentCompletedEvent
+)

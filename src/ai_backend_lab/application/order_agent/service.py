@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+
 from ai_backend_lab.application.exceptions import (
     LLMOutputError,
 )
@@ -6,11 +8,18 @@ from ai_backend_lab.application.order_agent.executor import (
     ToolExecutor,
 )
 from ai_backend_lab.application.order_agent.models import (
+    AgentAnswerEvent,
+    AgentApprovalRequiredEvent,
     AgentApprovalResult,
+    AgentCompletedEvent,
+    AgentEvent,
     AgentResult,
     AgentRunResult,
+    AgentStartedEvent,
     AgentState,
     AgentStep,
+    AgentToolCalledEvent,
+    AgentToolCompletedEvent,
     ConversationState,
 )
 from ai_backend_lab.application.order_agent.prompts import ORDER_AGENT_INSTRUCTIONS
@@ -91,6 +100,113 @@ class OrderAgentService:
 
         state.pending_tool_calls = []
         return await self._continue(state, pending_tool_outputs=tool_outputs)
+
+    async def stream(
+        self,
+        user_message: str,
+        conversation: ConversationState | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        if conversation is None:
+            conversation = ConversationState()
+
+        state = AgentState(
+            user_message=user_message,
+            conversation=conversation,
+        )
+
+        yield AgentStartedEvent()
+
+        async for event in self._continue_stream(
+            state=state,
+            pending_tool_outputs=[],
+        ):
+            yield event
+
+    async def _continue_stream(
+        self,
+        state: AgentState,
+        pending_tool_outputs: list[LLMToolOutput],
+    ) -> AsyncIterator[AgentEvent]:
+        while True:
+            request = self._build_request(
+                state=state,
+                tool_outputs=pending_tool_outputs,
+            )
+
+            result = await self._llm.generate(request)
+            state.continuation_id = result.continuation_id
+
+            if not result.tool_calls:
+                state.conversation.messages.extend(
+                    [
+                        LLMMessage(
+                            role=LLMRole.USER,
+                            content=state.user_message,
+                        ),
+                        LLMMessage(
+                            role=LLMRole.ASSISTANT,
+                            content=result.text,
+                        ),
+                    ]
+                )
+                agent_result = AgentResult(
+                    answer=result.text,
+                    steps=len(state.steps),
+                    conversation=state.conversation,
+                )
+                yield AgentAnswerEvent(
+                    answer=result.text,
+                )
+
+                yield AgentCompletedEvent(
+                    result=agent_result,
+                )
+                return
+
+            if len(state.steps) >= self._max_steps:
+                raise AgentMaxStepsExceededError(
+                    "Agent exceeded the maximum "
+                    f"number of tool steps: "
+                    f"{self._max_steps}."
+                )
+
+            if result.continuation_id is None:
+                raise LLMOutputError("LLM tool call response " "cannot be continued.")
+
+            for tool_call in result.tool_calls:
+                yield AgentToolCalledEvent(
+                    call_id=tool_call.call_id,
+                    tool_name=tool_call.name,
+                    arguments=tool_call.arguments,
+                )
+
+            approval_requests = self._executor.required_approvals(
+                result.tool_calls,
+                approved_call_ids=set(),
+                rejected_call_ids=set(),
+            )
+
+            if approval_requests:
+                state.pending_tool_calls = result.tool_calls
+                yield AgentApprovalRequiredEvent(
+                    requests=approval_requests,
+                )
+                return
+
+            tool_outputs = await self._executor.execute_all(result.tool_calls)
+            for output in tool_outputs:
+                yield AgentToolCompletedEvent(
+                    call_id=output.call_id, output=output.output
+                )
+
+            step = AgentStep(
+                number=len(state.steps) + 1,
+                tool_calls=result.tool_calls,
+            )
+
+            step.tool_outputs.extend(tool_outputs)
+            state.steps.append(step)
+            pending_tool_outputs = tool_outputs
 
     def _build_request(
         self,
