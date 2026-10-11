@@ -6,7 +6,9 @@ from ai_backend_lab.application.order_agent.executor import (
     ToolExecutor,
 )
 from ai_backend_lab.application.order_agent.models import (
+    AgentApprovalResult,
     AgentResult,
+    AgentRunResult,
     AgentState,
     AgentStep,
 )
@@ -41,45 +43,43 @@ class OrderAgentService:
     async def run(
         self,
         user_message: str,
-    ) -> AgentResult:
+    ) -> AgentRunResult:
         state = AgentState(
             user_message=user_message,
         )
-        pending_tool_outputs: list[LLMToolOutput] = []
 
-        while True:
-            request = self._build_request(
-                state,
-                pending_tool_outputs,
-            )
+        return await self._continue(
+            state,
+            pending_tool_outputs=[],
+        )
 
-            result = await self._llm.generate(request)
-            state.continuation_id = result.continuation_id
+    async def resume(
+        self,
+        state: AgentState,
+        approved_call_ids: set[str],
+    ) -> AgentRunResult:
+        if not state.pending_tool_calls:
+            raise ValueError("Agent state has no pending tool calls.")
 
-            if not result.tool_calls:
-                return AgentResult(
-                    answer=result.text,
-                    steps=len(state.steps),
-                )
-            if len(state.steps) >= self._max_steps:
-                raise AgentMaxStepsExceededError(
-                    "Agent exceeded the maximum "
-                    f"number of tool steps: {self._max_steps}."
-                )
+        approval_requests = self._executor.required_approvals(
+            state.pending_tool_calls,
+            approved_call_ids,
+        )
 
-            if result.continuation_id is None:
-                raise LLMOutputError("LLM tool call response cannot be continued.")
+        if approval_requests:
+            return AgentApprovalResult(state=state, requests=approval_requests)
 
-            tool_outputs = await self._executor.execute_all(result.tool_calls)
+        tool_outputs = await self._executor.execute_all(state.pending_tool_calls)
+        step = AgentStep(
+            number=len(state.steps) + 1,
+            tool_calls=state.pending_tool_calls,
+        )
+        step.tool_outputs.extend(tool_outputs)
 
-            step = AgentStep(
-                number=len(state.steps) + 1,
-                tool_calls=result.tool_calls,
-            )
-            step.tool_outputs.extend(tool_outputs)
-            state.steps.append(step)
+        state.steps.append(step)
 
-            pending_tool_outputs = tool_outputs
+        state.pending_tool_calls = []
+        return await self._continue(state, pending_tool_outputs=tool_outputs)
 
     def _build_request(
         self,
@@ -103,3 +103,62 @@ class OrderAgentService:
             tool_outputs=tool_outputs,
             tools=self._registry.definitions(),
         )
+
+    async def _continue(
+        self,
+        state: AgentState,
+        pending_tool_outputs: list[LLMToolOutput],
+    ) -> AgentRunResult:
+        while True:
+            request = self._build_request(
+                state,
+                pending_tool_outputs,
+            )
+
+            result = await self._llm.generate(request)
+            state.continuation_id = result.continuation_id
+
+            # No tool call means the model has finished.
+            if not result.tool_calls:
+                return AgentResult(
+                    answer=result.text,
+                    steps=len(state.steps),
+                )
+
+            # The model wants another tool step,
+            # but the execution budget has been exhausted.
+            if len(state.steps) >= self._max_steps:
+                raise AgentMaxStepsExceededError(
+                    "Agent exceeded the maximum "
+                    f"number of tool steps: {self._max_steps}."
+                )
+
+            # Tool outputs must be sent back to the
+            # same LLM interaction.
+            if result.continuation_id is None:
+                raise LLMOutputError("LLM tool call response cannot be continued.")
+
+            approval_requests = self._executor.required_approvals(
+                result.tool_calls,
+                approved_call_ids=set(),
+            )
+
+            # Do not execute any tool in this batch
+            # until all required approvals are granted.
+            if approval_requests:
+                state.pending_tool_calls = result.tool_calls
+                return AgentApprovalResult(
+                    state=state,
+                    requests=approval_requests,
+                )
+
+            tool_outputs = await self._executor.execute_all(result.tool_calls)
+
+            step = AgentStep(
+                number=len(state.steps) + 1,
+                tool_calls=result.tool_calls,
+            )
+            step.tool_outputs.extend(tool_outputs)
+            state.steps.append(step)
+
+            pending_tool_outputs = tool_outputs

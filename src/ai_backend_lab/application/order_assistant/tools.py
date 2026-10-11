@@ -42,3 +42,35 @@ GET_ORDER_TOOL = LLMToolDefinition(
         "additionalProperties": False,
     },
 )
+
+
+class CancelOrderArguments(BaseModel):
+    order_number: str
+
+
+class CancelOrderToolOutput(BaseModel):
+    order_number: str
+    status: OrderStatus
+
+
+CANCEL_ORDER_TOOL = LLMToolDefinition(
+    name="cancel_order",
+    description=(
+        "Cancel an existing order. "
+        "Use this only when the user explicitly asks "
+        "to cancel an order."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "order_number": {
+                "type": "string",
+                "description": ("The business order number to cancel."),
+            },
+        },
+        "required": [
+            "order_number",
+        ],
+        "additionalProperties": False,
+    },
+)

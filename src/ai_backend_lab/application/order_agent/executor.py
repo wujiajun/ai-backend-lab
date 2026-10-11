@@ -3,6 +3,7 @@ import asyncio
 from ai_backend_lab.application.exceptions import (
     LLMOutputError,
 )
+from ai_backend_lab.application.order_agent.models import AgentApprovalRequest
 from ai_backend_lab.application.order_agent.registry import (
     ToolRegistry,
 )
@@ -88,3 +89,30 @@ class ToolExecutor:
                 tasks.append(task)
 
         return [task.result() for task in tasks]
+
+    def required_approvals(
+        self,
+        tool_calls: list[LLMToolCall],
+        approved_call_ids: set[str],
+    ) -> list[AgentApprovalRequest]:
+        requests: list[AgentApprovalRequest] = []
+
+        for tool_call in tool_calls:
+            tool = self._registry.get(tool_call.name)
+
+            if tool is None:
+                raise LLMOutputError(f"Unsupported tool: {tool_call.name}")
+
+            if (
+                tool.policy.requires_approval
+                and tool_call.call_id not in approved_call_ids
+            ):
+                requests.append(
+                    AgentApprovalRequest(
+                        call_id=tool_call.call_id,
+                        tool_name=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+                )
+
+        return requests
