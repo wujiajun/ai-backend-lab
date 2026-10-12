@@ -101,7 +101,6 @@ class OrderAgentService:
 
         tool_outputs = await self._executor.execute_resolved(
             tool_calls=tool_calls,
-            approved_call_ids=approved_call_ids,
             rejected_call_ids=rejected_call_ids,
         )
 

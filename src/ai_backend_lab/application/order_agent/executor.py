@@ -67,7 +67,6 @@ class ToolExecutor:
     async def execute_resolved(
         self,
         tool_calls: list[LLMToolCall],
-        approved_call_ids: set[str],
         rejected_call_ids: set[str],
     ) -> list[LLMToolOutput]:
         executable_calls: list[LLMToolCall] = []
