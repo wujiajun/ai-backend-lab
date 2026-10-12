@@ -72,7 +72,7 @@ def test_engine() -> Iterator[Engine]:
 
     yield engine
 
-    engine.dispose
+    engine.dispose()
 
 
 @pytest.fixture
