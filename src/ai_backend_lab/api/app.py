@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from openai import AsyncOpenAI
 
 from ai_backend_lab.api.errors import register_exception_handlers
+from ai_backend_lab.api.routers.order_agent import (
+    router as order_agent_router,
+)
 from ai_backend_lab.api.routers.order_assistant import router as order_assistant_router
 from ai_backend_lab.api.routers.orders import router as orders_router
 from ai_backend_lab.config import load_settings
@@ -59,6 +62,7 @@ app.middleware("http")(request_context_middleware)
 register_exception_handlers(app=app)
 app.include_router(orders_router)
 app.include_router(order_assistant_router)
+app.include_router(order_agent_router)
 
 
 @app.get("/")

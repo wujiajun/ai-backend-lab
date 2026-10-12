@@ -4,6 +4,9 @@ import httpx
 from fastapi import Depends, Request
 from openai import AsyncOpenAI
 
+from ai_backend_lab.application.order_agent.run_service import (
+    AgentRunService,
+)
 from ai_backend_lab.application.order_assistant.service import OrderAssistantService
 from ai_backend_lab.application.ports.llm import (
     LLMGateway,
@@ -11,6 +14,7 @@ from ai_backend_lab.application.ports.llm import (
 from ai_backend_lab.application.ports.risk import RiskGateway
 from ai_backend_lab.application.services import OrderService
 from ai_backend_lab.composition import (
+    build_agent_run_service,
     build_order_assistant_service,
     build_order_service,
 )
@@ -80,3 +84,20 @@ def get_order_assistant_service(
 OrderAssistantServiceDep = Annotated[
     OrderAssistantService, Depends(get_order_assistant_service)
 ]
+
+
+def get_agent_run_service(
+    llm: LLMGatewayDep,
+    risk_gateway: RiskGatewayDep,
+) -> AgentRunService:
+    settings = load_settings()
+
+    return build_agent_run_service(
+        session_factory=session_factory,
+        llm=llm,
+        risk_gateway=risk_gateway,
+        max_steps=settings.agent_max_steps,
+    )
+
+
+AgentRunServiceDep = Annotated[AgentRunService, Depends(get_agent_run_service)]

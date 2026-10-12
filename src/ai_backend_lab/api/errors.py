@@ -10,6 +10,11 @@ from ai_backend_lab.application.exceptions import (
     RiskServiceIntegrationError,
     RiskServiceUnavailableError,
 )
+from ai_backend_lab.application.order_agent.exceptions import (
+    AgentRunConflictError,
+    AgentRunNotFoundError,
+    AgentRunStateError,
+)
 from ai_backend_lab.domain.exceptions import (
     DuplicateOrderError,
     OrderCannotBeCancelledError,
@@ -26,6 +31,10 @@ class ErrorCode(StrEnum):
     ORDER_REJECTED = "ORDER_REJECTED"
     RISK_SERVICE_UNAVAILABLE = "RISK_SERVICE_UNAVAILABLE"
     RISK_SERVICE_INTEGRATION_ERROR = "RISK_SERVICE_INTEGRATION_ERROR"
+
+    AGENT_RUN_NOT_FOUND = "AGENT_RUN_NOT_FOUND"
+    AGENT_RUN_CONFLICT = "AGENT_RUN_CONFLICT"
+    AGENT_RUN_STATE_ERROR = "AGENT_RUN_STATE_ERROR"
 
 
 class ErrorDetail(BaseModel):
@@ -69,6 +78,18 @@ ERROR_MAPPINGS: dict[type[Exception], ErrorDefinition] = {
     RiskServiceIntegrationError: ErrorDefinition(
         status_code=status.HTTP_502_BAD_GATEWAY,
         code=ErrorCode.RISK_SERVICE_INTEGRATION_ERROR,
+    ),
+    AgentRunNotFoundError: ErrorDefinition(
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=ErrorCode.AGENT_RUN_NOT_FOUND,
+    ),
+    AgentRunConflictError: ErrorDefinition(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ErrorCode.AGENT_RUN_CONFLICT,
+    ),
+    AgentRunStateError: ErrorDefinition(
+        status_code=status.HTTP_409_CONFLICT,
+        code=ErrorCode.AGENT_RUN_STATE_ERROR,
     ),
 }
 
