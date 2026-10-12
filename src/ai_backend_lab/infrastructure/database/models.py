@@ -1,6 +1,16 @@
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Numeric, String
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ai_backend_lab.infrastructure.database.base import Base
@@ -22,3 +32,46 @@ class OrderRecord(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
 
     status: Mapped[str] = mapped_column(String(20))
+
+
+class AgentRunModel(Base):
+    __tablename__ = "agent_runs"
+
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+
+    state: Mapped[dict[str, object] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    answer: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
