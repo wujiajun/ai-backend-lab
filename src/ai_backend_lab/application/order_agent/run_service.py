@@ -48,6 +48,7 @@ class AgentRunService:
 
         try:
             result = await self._agent.run(
+                run_id=run_id,
                 user_message=user_message,
                 conversation=conversation,
             )

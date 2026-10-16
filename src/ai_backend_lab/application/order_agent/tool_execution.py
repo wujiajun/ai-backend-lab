@@ -9,6 +9,11 @@ from ai_backend_lab.application.exceptions import (
 )
 
 
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    run_id: str
+
+
 class ToolExecutionStatus(StrEnum):
     STARTED = "started"
     COMPLETED = "completed"
@@ -72,3 +77,10 @@ def build_tool_intent_hash(
     payload = f"{tool_name}\0" f"{canonical_arguments}"
 
     return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def build_tool_execution_key(
+    run_id: str,
+    call_id: str,
+) -> str:
+    return f"{run_id}:{call_id}"

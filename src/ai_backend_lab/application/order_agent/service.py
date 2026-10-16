@@ -59,12 +59,14 @@ class OrderAgentService:
 
     async def run(
         self,
+        run_id: str,
         user_message: str,
         conversation: ConversationState | None = None,
     ) -> AgentRunResult:
         if conversation is None:
             conversation = ConversationState()
         state = AgentState(
+            run_id=run_id,
             user_message=user_message,
             conversation=conversation,
         )
@@ -120,6 +122,7 @@ class OrderAgentService:
 
     async def stream(
         self,
+        run_id: str,
         user_message: str,
         conversation: ConversationState | None = None,
     ) -> AsyncIterator[AgentEvent]:
@@ -127,6 +130,7 @@ class OrderAgentService:
             conversation = ConversationState()
 
         state = AgentState(
+            run_id=run_id,
             user_message=user_message,
             conversation=conversation,
         )

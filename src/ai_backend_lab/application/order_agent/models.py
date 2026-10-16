@@ -42,6 +42,7 @@ class AgentTrace:
 
 @dataclass
 class AgentState:
+    run_id: str
     user_message: str
     conversation: ConversationState
 
