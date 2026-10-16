@@ -23,6 +23,9 @@ from ai_backend_lab.application.services import OrderService
 from ai_backend_lab.infrastructure.agent.run_store import (
     SqlAlchemyAgentRunStore,
 )
+from ai_backend_lab.infrastructure.agent.tool_execution_store import (
+    SqlAlchemyToolExecutionStore,
+)
 from ai_backend_lab.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from ai_backend_lab.infrastructure.order_number import UuidOrderNumberGenerator
 
@@ -71,8 +74,13 @@ def build_order_agent_service(
         ]
     )
 
+    execution_store = SqlAlchemyToolExecutionStore(
+        session_factory=session_factory,
+    )
+
     executor = ToolExecutor(
         registry=registry,
+        execution_store=execution_store,
     )
 
     return OrderAgentService(

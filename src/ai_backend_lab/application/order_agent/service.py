@@ -29,6 +29,9 @@ from ai_backend_lab.application.order_agent.prompts import ORDER_AGENT_INSTRUCTI
 from ai_backend_lab.application.order_agent.registry import (
     ToolRegistry,
 )
+from ai_backend_lab.application.order_agent.tool_execution import (
+    ToolExecutionContext,
+)
 from ai_backend_lab.application.ports.llm import (
     LLMGateway,
     LLMMessage,
@@ -104,6 +107,9 @@ class OrderAgentService:
         tool_outputs = await self._executor.execute_resolved(
             tool_calls=tool_calls,
             rejected_call_ids=rejected_call_ids,
+            context=ToolExecutionContext(
+                run_id=state.run_id,
+            ),
         )
 
         tool_duration_ms = (perf_counter() - tool_started) * 1000
@@ -207,7 +213,10 @@ class OrderAgentService:
 
             tool_started = perf_counter()
 
-            tool_outputs = await self._executor.execute_all(result.tool_calls)
+            tool_outputs = await self._executor.execute_all(
+                result.tool_calls,
+                ToolExecutionContext(state.run_id),
+            )
 
             tool_duration_ms = (perf_counter() - tool_started) * 1000
 
@@ -303,7 +312,10 @@ class OrderAgentService:
                 )
 
             tool_started = perf_counter()
-            tool_outputs = await self._executor.execute_all(result.tool_calls)
+            tool_outputs = await self._executor.execute_all(
+                result.tool_calls,
+                ToolExecutionContext(state.run_id),
+            )
             tool_duration_ms = (perf_counter() - tool_started) * 1000
 
             self._record_completed_tool_step(
