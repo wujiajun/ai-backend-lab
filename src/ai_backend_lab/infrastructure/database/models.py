@@ -5,12 +5,12 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     DateTime,
+    ForeignKey,
     Integer,
     Numeric,
     String,
     Text,
     func,
-    ForeignKey,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
