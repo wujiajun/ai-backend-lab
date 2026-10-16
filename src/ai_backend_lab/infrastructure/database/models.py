@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    ForeignKey,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,6 +62,57 @@ class AgentRunModel(Base):
         Integer,
         nullable=False,
         default=1,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ToolExecutionModel(Base):
+    __tablename__ = "tool_executions"
+
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey(
+            "agent_runs.run_id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+
+    call_id: Mapped[str] = mapped_column(
+        String(128),
+        primary_key=True,
+    )
+
+    tool_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    intent_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+
+    output: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

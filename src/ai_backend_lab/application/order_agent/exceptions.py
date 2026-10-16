@@ -12,3 +12,7 @@ class AgentRunConflictError(Exception):
 
 class AgentRunStateError(Exception):
     pass
+
+
+class ToolExecutionConflictError(Exception):
+    pass
