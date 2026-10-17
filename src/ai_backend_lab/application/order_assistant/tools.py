@@ -51,7 +51,7 @@ class CancelOrderArguments(BaseModel):
 class CancelOrderToolOutput(BaseModel):
     ok: bool
     order_number: str
-    status: OrderStatus | None = None
+    status: str | None = None
     error_code: str | None = None
     message: str | None = None
 

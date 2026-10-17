@@ -26,11 +26,25 @@ from ai_backend_lab.domain.exceptions import (
     OrderNotFoundError,
 )
 
+from ai_backend_lab.application.ports.order_commands import (
+    CancelOrderCommand,
+    OrderCommandGateway,
+    OrderCommandNotFoundError,
+    OrderCommandRejectedError,
+)
+
 
 @dataclass(frozen=True)
 class AgentToolPolicy:
     parallel_safe: bool = False
     requires_approval: bool = False
+
+
+@dataclass(frozen=True)
+class AgentToolContext:
+    run_id: str
+    call_id: str
+    idempotency_key: str
 
 
 class AgentTool(Protocol):
@@ -45,6 +59,7 @@ class AgentTool(Protocol):
     async def execute(
         self,
         arguments: str,
+        context: AgentToolContext,
     ) -> str: ...
 
 
@@ -70,6 +85,7 @@ class GetOrderTool:
     async def execute(
         self,
         arguments: str,
+        _context: AgentToolContext,
     ) -> str:
         try:
             args = GetOrderArguments.model_validate_json(arguments)
@@ -96,9 +112,9 @@ class GetOrderTool:
 class CancelOrderTool:
     def __init__(
         self,
-        order_service: OrderService,
+        order_command_gateway: OrderCommandGateway,
     ) -> None:
-        self._order_service = order_service
+        self._order_command_gateway = order_command_gateway
 
     @property
     def definition(
@@ -118,6 +134,7 @@ class CancelOrderTool:
     async def execute(
         self,
         arguments: str,
+        context: AgentToolContext,
     ) -> str:
         try:
             args = CancelOrderArguments.model_validate_json(arguments)
@@ -127,9 +144,11 @@ class CancelOrderTool:
             ) from exc
 
         try:
-            order = await asyncio.to_thread(
-                self._order_service.cancel_order,
-                args.order_number,
+            order = await self._order_command_gateway.cancel_order(
+                CancelOrderCommand(
+                    order_number=args.order_number,
+                    idempotency_key=context.idempotency_key,
+                ),
             )
 
             result = CancelOrderToolOutput(
@@ -137,14 +156,14 @@ class CancelOrderTool:
                 order_number=order.order_number,
                 status=order.status,
             )
-        except OrderNotFoundError:
+        except OrderCommandNotFoundError:
             result = CancelOrderToolOutput(
                 ok=False,
                 order_number=args.order_number,
                 error_code="ORDER_NOT_FOUND",
                 message="The order was not found.",
             )
-        except OrderCannotBeCancelledError:
+        except OrderCommandRejectedError:
             result = CancelOrderToolOutput(
                 ok=False,
                 order_number=args.order_number,

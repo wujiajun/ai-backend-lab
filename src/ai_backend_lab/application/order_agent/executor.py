@@ -27,6 +27,13 @@ from ai_backend_lab.application.ports.llm import (
     LLMToolOutput,
 )
 
+from ai_backend_lab.application.order_agent.tool_execution import (
+    build_tool_execution_key,
+)
+from ai_backend_lab.application.order_agent.tools import (
+    AgentToolContext,
+)
+
 
 class ToolExecutor:
     def __init__(
@@ -79,7 +86,19 @@ class ToolExecutor:
                 intent_hash=intent_hash,
             )
 
-        output = await tool.execute(tool_call.arguments)
+        tool_context = AgentToolContext(
+            run_id=context.run_id,
+            call_id=tool_call.call_id,
+            idempotency_key=build_tool_execution_key(
+                run_id=context.run_id,
+                call_id=tool_call.call_id,
+            ),
+        )
+
+        output = await tool.execute(
+            tool_call.arguments,
+            tool_context,
+        )
 
         completed = await self._execution_store.complete(
             run_id=context.run_id,
