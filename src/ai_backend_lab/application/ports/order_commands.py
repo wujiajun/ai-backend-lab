@@ -31,3 +31,15 @@ class OrderCommandNotFoundError(OrderCommandError):
 
 class OrderCommandRejectedError(OrderCommandError):
     pass
+
+
+class OrderCommandIntegrationError(OrderCommandError):
+    pass
+
+
+class OrderCommandUnavailableError(OrderCommandIntegrationError):
+    pass
+
+
+class OrderCommandTimeoutError(OrderCommandIntegrationError):
+    pass
