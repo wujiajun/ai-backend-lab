@@ -27,11 +27,10 @@ from ai_backend_lab.infrastructure.agent.tool_execution_store import (
     SqlAlchemyToolExecutionStore,
 )
 from ai_backend_lab.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
-from ai_backend_lab.infrastructure.order_number import UuidOrderNumberGenerator
-
 from ai_backend_lab.infrastructure.order_commands.local import (
     LocalOrderCommandGateway,
 )
+from ai_backend_lab.infrastructure.order_number import UuidOrderNumberGenerator
 
 
 def build_order_service(

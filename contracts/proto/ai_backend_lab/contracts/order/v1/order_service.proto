@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package ai_backend_lab.contracts.order.v1;
+
+
+service OrderCommandService {
+  rpc CancelOrder(CancelOrderRequest)
+      returns (CancelOrderResponse);
+}
+
+
+message CancelOrderRequest {
+  string order_number = 1;
+  string idempotency_key = 2;
+}
+
+
+message CancelOrderResponse {
+  string order_number = 1;
+  OrderStatus status = 2;
+}
+
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING = 1;
+  ORDER_STATUS_PAID = 2;
+  ORDER_STATUS_SHIPPED = 3;
+  ORDER_STATUS_CANCELLED = 4;
+}
