@@ -15,6 +15,8 @@ from ai_backend_lab.contracts.order.v1 import (
     order_service_pb2_grpc,
 )
 
+from typing import Never
+
 
 class GrpcOrderCommandGateway(OrderCommandGateway):
     def __init__(
@@ -51,7 +53,7 @@ class GrpcOrderCommandGateway(OrderCommandGateway):
     @staticmethod
     def _raise_mapped_error(
         exc: grpc.aio.AioRpcError,
-    ) -> None:
+    ) -> Never:
         code = exc.code()
         details = exc.details() or "Order service RPC failed."
 
