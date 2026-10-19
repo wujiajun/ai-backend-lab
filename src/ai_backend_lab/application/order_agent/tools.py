@@ -80,8 +80,9 @@ class GetOrderTool:
     async def execute(
         self,
         arguments: str,
-        _context: AgentToolContext,
+        context: AgentToolContext,
     ) -> str:
+        _ = context
         try:
             args = GetOrderArguments.model_validate_json(arguments)
         except ValidationError as exc:

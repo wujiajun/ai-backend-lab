@@ -29,6 +29,10 @@ from ai_backend_lab.infrastructure.agent.tool_execution_store import (
 from ai_backend_lab.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from ai_backend_lab.infrastructure.order_number import UuidOrderNumberGenerator
 
+from ai_backend_lab.infrastructure.order_commands.local import (
+    LocalOrderCommandGateway,
+)
+
 
 def build_order_service(
     session_factory: sessionmaker[Session],
@@ -59,12 +63,16 @@ def build_order_agent_service(
         risk_gateway=risk_gateway,
     )
 
+    order_command_gateway = LocalOrderCommandGateway(
+        order_service=order_service,
+    )
+
     get_order_tool = GetOrderTool(
         order_service=order_service,
     )
 
     cancel_order_tool = CancelOrderTool(
-        order_service=order_service,
+        order_command_gateway=order_command_gateway,
     )
 
     registry = ToolRegistry(
