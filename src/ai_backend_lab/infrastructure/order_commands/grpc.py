@@ -78,13 +78,13 @@ class GrpcOrderCommandGateway(OrderCommandGateway):
         status: int,
     ) -> str:
         mapping = {
-            (order_service_pb2.ORDER_STATUS_PENDING): "Pending",
-            (order_service_pb2.ORDER_STATUS_PAID): "Paid",
-            (order_service_pb2.ORDER_STATUS_SHIPPED): "Shipped",
-            (order_service_pb2.ORDER_STATUS_CANCELLED): "Cancelled",
+            int(order_service_pb2.ORDER_STATUS_PENDING): "Pending",
+            int(order_service_pb2.ORDER_STATUS_PAID): "Paid",
+            int(order_service_pb2.ORDER_STATUS_SHIPPED): "Shipped",
+            int(order_service_pb2.ORDER_STATUS_CANCELLED): "Cancelled",
         }
 
-        result = mapping.get(status)
+        result = mapping.get(int(status))
 
         if result is None:
             raise OrderCommandIntegrationError(
