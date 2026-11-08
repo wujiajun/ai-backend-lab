@@ -1,173 +1,409 @@
-# Architecture and Verified Repository State
+# Architecture — AI Backend Lab
 
-_Review snapshot: 2026-11-08._
+## 1. Purpose
 
-Repository: `wujiajun/ai-backend-lab`
+This document describes the architectural direction and the last known implementation state of AI Backend Lab.
 
-Branch: `main`
+It is intended to help contributors understand:
 
-HEAD: `358736ef321610bf34ac70b4b0180a07ff76130d`
+- The major architectural layers.
+- The responsibilities of core components.
+- How an Agent run is executed.
+- How tools are invoked.
+- How side effects are tracked.
+- How idempotency is handled.
+- What is implemented and what remains incomplete.
 
-This document describes the repository state observed during the read-only review. It does not claim that every intended production capability is complete.
+This document must be updated when the actual architecture changes.
 
-## 1. High-level Structure
+**Important:** Implementation descriptions below are based on a historical repository inspection. Re-inspect the current source before treating any detail as current.
 
-The project follows a ports-and-adapters / clean-architecture direction.
+## 2. Architectural Principles
 
-```text
-src/ai_backend_lab/
-├── api/
-│   ├── routers/
-│   ├── schemas/
-│   ├── app.py
-│   ├── dependencies.py
-│   └── errors.py
-├── application/
-│   ├── order_agent/
-│   ├── order_assistant/
-│   ├── ports/
-│   └── services.py
-├── contracts/
-│   └── order/v1/              # Generated protobuf Python
-├── domain/
-├── infrastructure/
-│   ├── agent/
-│   ├── database/
-│   ├── llm/
-│   ├── order_commands/
-│   └── risk.py
-├── observability/
-├── composition.py
-└── config.py
+The project follows these principles:
 
-contracts/proto/               # Source .proto contracts
-alembic/versions/              # Database migrations
-tests/
-```
+1. Separate business logic from infrastructure.
+2. Keep application orchestration independent of vendor SDKs.
+3. Use ports and adapters at meaningful boundaries.
+4. Make resource lifecycle explicit.
+5. Persist long-running Agent execution state.
+6. Track side-effecting tool executions independently.
+7. Treat retries and duplicate requests as reliability problems.
+8. Do not assume exactly-once execution.
+9. Test failure scenarios, not only successful responses.
+10. Keep the architecture understandable and maintainable.
 
-Intended dependency direction:
+## 3. High-level Architecture
+
+The intended architecture is:
 
 ```text
-API → Application → Domain
-          ↓
-         Ports
-          ↑
-Infrastructure adapters
+                    Client
+                      |
+                      v
+                FastAPI API Layer
+                      |
+                      v
+             Application Services
+                      |
+          +-----------+-----------+
+          |           |           |
+          v           v           v
+       Agent       Order       Application
+       Service     Service      Policies
+          |
+          v
+       Agent Loop
+          |
+          v
+      LLMGateway
+          |
+          v
+      LLM Adapter
+          |
+          v
+      External LLM Provider
+
+Agent Loop
+    |
+    v
+ Tool Registry
+    |
+    v
+ Tool Executor
+    |
+    +-----------------------------+
+    |              |              |
+    v              v              v
+ Tool A         Tool B         Tool C
+    |              |              |
+    v              v              v
+ Application   Gateway        Gateway
+ Services      / Adapter      / Adapter
+
+Persistence:
+    |
+    +-- Agent Runs
+    |
+    +-- Agent Checkpoints
+    |
+    +-- Tool Executions
+    |
+    +-- Business Data
 ```
 
-Infrastructure-specific implementations should remain behind application ports.
+This is a conceptual architecture. The actual source code and dependency wiring remain authoritative.
 
-## 2. Agent Request Path
+## 4. Architectural Layers
 
-The durable Agent API currently exposes:
+### 4.1 API Layer
+
+Responsibilities:
+
+- Expose HTTP endpoints.
+- Validate incoming request structure.
+- Resolve request-scoped dependencies.
+- Translate application results into HTTP responses.
+- Map application and domain errors to API error contracts.
+
+The API layer should not contain business workflows or vendor-specific LLM orchestration.
+
+The Agent API historically included:
+
+- `POST /agent/runs`
+- `POST /agent/runs/{run_id}/resume`
+- `GET /agent/runs/{run_id}`
+
+Verify the current route definitions before relying on these paths.
+
+### 4.2 Application Layer
+
+Responsibilities:
+
+- Coordinate use cases.
+- Manage Agent execution.
+- Apply application-level policies.
+- Coordinate repositories and gateways.
+- Manage transaction boundaries.
+- Coordinate approval and resume operations.
+
+Application services should depend on abstractions rather than concrete external SDKs.
+
+Examples observed in the project include:
+
+- Agent run orchestration.
+- Order Agent orchestration.
+- Tool execution coordination.
+- Order command coordination.
+
+### 4.3 Domain Layer
+
+Responsibilities:
+
+- Represent business concepts.
+- Encapsulate business rules.
+- Define domain-level validation.
+- Avoid infrastructure dependencies.
+
+Domain models should not depend on FastAPI, HTTPX, OpenAI SDKs, or database sessions.
+
+### 4.4 Ports
+
+Ports define the interfaces through which application logic interacts with external capabilities.
+
+Examples observed in the project include:
+
+- `LLMGateway`
+- `RiskGateway`
+- `OrderCommandGateway`
+- `ToolExecutionStore`
+
+Ports should express application needs rather than expose vendor-specific SDK details.
+
+### 4.5 Infrastructure Adapters
+
+Adapters implement ports using concrete technologies.
+
+Examples include:
+
+- OpenAI-compatible LLM adapter.
+- HTTPX-based risk adapter.
+- Local order command adapter.
+- gRPC order command adapter.
+- SQLAlchemy persistence adapters.
+
+The application should be able to select an implementation through composition rather than changing its business logic.
+
+## 5. LLM Integration
+
+### 5.1 LLMGateway
+
+The application communicates with the LLM through an abstraction.
+
+Conceptually:
 
 ```text
-POST /agent/runs
-POST /agent/runs/{run_id}/resume
-GET  /agent/runs/{run_id}
+Application
+    |
+    v
+LLMGateway
+    |
+    v
+OpenAI Adapter
+    |
+    v
+External LLM API
 ```
 
-The current application path is:
+The purpose is to prevent application services from depending directly on a vendor SDK.
 
-```text
-FastAPI router
-  → AgentRunService
-    → OrderAgentService
-      → LLMGateway
-      → ToolRegistry
-      → ToolExecutor
-        → ToolExecutionStore
-        → AgentTool
-```
+### 5.2 Responsibilities
 
-`api/dependencies.py` obtains application services through `composition.py`.
+The LLM integration should handle:
 
-`OrderAgentService` implements:
+- Message construction.
+- Role management.
+- Prompt construction.
+- Structured output.
+- Tool/function calling.
+- Streaming where supported.
+- Timeout.
+- Retry policy.
+- Provider error translation.
+- Token usage.
+- Cost and latency observability.
 
-- Agent execution loop.
-- LLM continuation.
-- Tool execution.
-- Approval decisions.
-- Step limits.
-- Application-level streaming event generation.
+The LLM is a reasoning and response-generation component.
 
-The current Agent router does not expose a streaming HTTP endpoint.
+It is not the owner of business authorization, persistence, idempotency, or side-effect execution.
 
-## 3. Agent Run and Checkpoint Persistence
+## 6. Agent Runtime
 
-Relevant files:
+### 6.1 Agent Run
 
-- `application/order_agent/checkpoint.py`
-- `application/order_agent/run_service.py`
-- `infrastructure/agent/run_store.py`
-- `infrastructure/agent/state_serializer.py`
-- `infrastructure/database/models.py`
+An Agent run represents one logical execution of an Agent task.
 
-The `agent_runs` table stores:
+It may involve:
 
-- `run_id`
-- Lifecycle `status`
-- Serialized Agent `state`
-- Final `answer`
-- Optimistic-lock `version`
-- Timestamps
+- Multiple LLM calls.
+- Multiple tool calls.
+- State transitions.
+- Approval pauses.
+- Checkpoints.
+- Completion or failure.
 
-Current statuses:
+The run lifecycle must be persisted independently of the HTTP request that started it.
+
+The previously observed lifecycle states included:
 
 - `RUNNING`
 - `WAITING_FOR_APPROVAL`
 - `COMPLETED`
 - `FAILED`
 
-### Start Flow
+Additional states may be required for recovery and cancellation, but should not be introduced without a clear design.
 
-`AgentRunService.start()`:
+### 6.2 AgentRunService
 
-1. Creates an initial `RUNNING` record.
-2. Executes the Agent.
-3. Persists a waiting-for-approval checkpoint or completed result.
-4. On a caught exception, attempts to mark the run as failed.
+The service is responsible for coordinating the Agent run lifecycle.
 
-### Resume Flow
+Historically observed responsibilities included:
 
-`AgentRunService.resume()`:
+- Creating a run.
+- Persisting its initial state.
+- Executing the Agent workflow.
+- Saving waiting-for-approval state.
+- Saving completion state.
+- Marking execution failures.
+- Resuming a run.
+- Using an expected version when claiming a run for resume.
 
-1. Loads a waiting checkpoint.
-2. Calls `claim_for_resume()`.
-3. Uses the expected version and waiting status in the SQL update.
-4. Increments the version.
-5. Continues execution after successfully claiming the run.
+The version-based resume claim helps prevent two concurrent requests from resuming the same run simultaneously.
 
-This is optimistic concurrency control intended to prevent two resume requests from both claiming the same run.
+### 6.3 Agent Loop
 
-### Current Limitation
+The Agent loop coordinates the interaction between the LLM and tools.
 
-The current implementation does not persist a new Agent checkpoint after every individual tool step.
-
-A process crash during an active run can leave a `RUNNING` row without a completed result or a resumable checkpoint.
-
-No recovery/reaper workflow was found in the reviewed source tree.
-
-## 4. Tool Execution Ledger
-
-Relevant files:
-
-- `application/order_agent/tool_execution.py`
-- `application/order_agent/executor.py`
-- `application/order_agent/tools.py`
-- `infrastructure/agent/tool_execution_store.py`
-- `infrastructure/database/models.py`
-- `alembic/versions/4134694f61e3_add_tool_executions.py`
-
-The `tool_executions` table is separate from `agent_runs`.
-
-Its composite primary key is:
+Conceptually:
 
 ```text
-(run_id, call_id)
+Start Agent Run
+      |
+      v
+Build LLM Context
+      |
+      v
+Call LLM
+      |
+      v
+Inspect LLM Response
+      |
+      +---- Final Answer ----> Complete Run
+      |
+      +---- Tool Calls
+                |
+                v
+           Resolve Tools
+                |
+                v
+           Execute Tools
+                |
+                v
+          Append Results
+                |
+                v
+          Continue Loop
 ```
 
-It stores:
+The loop needs explicit limits and termination conditions.
+
+These include:
+
+- Maximum execution steps.
+- Final response detection.
+- Tool call handling.
+- Tool execution errors.
+- Approval pauses.
+- Run cancellation or failure.
+
+Do not allow an Agent loop to run indefinitely.
+
+## 7. Tool Architecture
+
+### 7.1 Tool Registry
+
+The registry resolves a tool name to a registered tool implementation.
+
+The LLM may request a tool by name, but it cannot decide which arbitrary Python function is safe to execute.
+
+The application controls the registry.
+
+### 7.2 Tool Policy
+
+Each tool should have an explicit execution policy.
+
+Relevant policy attributes include:
+
+- Whether approval is required.
+- Whether parallel execution is safe.
+- Whether the tool has side effects.
+- Whether retries are safe.
+- Whether the operation requires downstream idempotency.
+
+The historical implementation had these policies:
+
+| Tool | Approval required | Parallel-safe |
+|---|---:|---:|
+| GetOrder | No | No |
+| CancelOrder | Yes | No |
+
+These are historical observed values and should be checked against current source.
+
+### 7.3 Tool Executor
+
+The Tool Executor is the controlled execution boundary for tools.
+
+Its responsibilities include:
+
+1. Resolve the tool.
+2. Validate input.
+3. Identify the logical tool call.
+4. Compute an intent fingerprint.
+5. Claim or load the tool execution record.
+6. Apply idempotency behavior.
+7. Execute the tool when safe.
+8. Persist the result.
+9. Return the recorded or newly produced result.
+
+A tool should not bypass this boundary when it performs a side effect that needs reliable execution tracking.
+
+### 7.4 Sequential and Parallel Execution
+
+The historical implementation included:
+
+- Sequential execution.
+- A parallel path using `TaskGroup` when all relevant tools were marked parallel-safe.
+
+Parallel execution should be allowed only when the policies and business semantics permit it.
+
+A tool being technically asynchronous does not automatically mean it is safe to execute concurrently.
+
+## 8. Agent Runs vs Tool Executions
+
+These are separate persistence concepts.
+
+### 8.1 Agent Runs
+
+`agent_runs` represents the lifecycle of an Agent task.
+
+It answers questions such as:
+
+- Which Agent task is running?
+- What is its current state?
+- Is it waiting for approval?
+- Has it completed?
+- Has it failed?
+- Which checkpoint should be resumed?
+
+### 8.2 Tool Executions
+
+`tool_executions` represents an individual tool invocation within an Agent run.
+
+It answers questions such as:
+
+- Which tool was invoked?
+- Which logical tool call was it?
+- What input intent was associated with it?
+- Did execution start?
+- Did it complete?
+- Is its outcome uncertain?
+- Can the recorded result be replayed?
+
+The historical design used a uniqueness key based on:
+
+`(run_id, call_id)`
+
+The recorded fields included:
 
 - Tool name.
 - Intent hash.
@@ -175,214 +411,405 @@ It stores:
 - Output.
 - Timestamps.
 
-The two persistence models have different responsibilities:
-
-| Persistence | Responsibility |
-|---|---|
-| `agent_runs` | Overall Agent lifecycle, checkpoint, and approval state |
-| `tool_executions` | Claim and result of an individual logical tool call |
-
-Current tool execution statuses:
+The historical statuses included:
 
 - `STARTED`
 - `COMPLETED`
 - `UNKNOWN`
 
-### Current Executor Flow
+The exact current schema must be checked in the models and migrations.
 
-The current executor:
+### 8.3 Why They Must Be Separate
 
-1. Resolves the tool by name.
-2. Parses JSON arguments.
-3. Canonicalizes JSON using sorted keys and compact separators.
-4. Builds a SHA-256 intent hash from the tool name and canonical arguments.
-5. Looks up `(run_id, call_id)`.
-6. Creates a `STARTED` record if none exists.
-7. Executes the tool.
-8. Persists `COMPLETED` with the output.
-9. Replays stored output for an identical completed call.
-10. Rejects reuse of the same key with a different tool or intent.
-11. Refuses to blindly re-execute an existing `STARTED` or `UNKNOWN` record.
+An Agent run may invoke several tools.
 
-The SQLAlchemy store wraps synchronous SQLAlchemy session operations using `asyncio.to_thread()`.
+A run can be interrupted while one tool is executing.
 
-### Important Gaps
+If the system stores only the Agent run state, it cannot reliably determine whether an individual side effect already happened.
 
-**A. Tool-specific validation happens after the claim**
+Separating the two records provides a foundation for:
 
-JSON parsing and canonicalization happen before the claim.
+- Tool-level idempotency.
+- Result replay.
+- Uncertain-outcome handling.
+- Recovery.
+- Auditability.
+- Per-tool execution observability.
 
-However, tool-specific Pydantic validation happens inside each tool's `execute()` method.
+## 9. Idempotency and Intent Fingerprinting
 
-The executor creates the `STARTED` record before calling `tool.execute()`.
+### 9.1 Logical Tool Call Identity
 
-Therefore, schema-invalid arguments can create a `STARTED` ledger record even though the business operation was never attempted.
+The historical design used:
 
-**B. No explicit UNKNOWN transition**
+`(run_id, call_id)`
 
-The `UNKNOWN` status exists, and the executor refuses to blindly replay it.
+This identifies a logical tool call within a particular Agent run.
 
-However, the store currently exposes `get`, `create`, and `complete`; no explicit persistence transition to `UNKNOWN` or reconciliation workflow was found.
+### 9.2 Intent Fingerprint
 
-**C. STARTED records can remain indefinitely**
+The executor canonicalizes the tool arguments and computes a SHA-256 hash.
 
-An exception after the `STARTED` claim can leave the record in `STARTED`.
-
-There is no complete recovery policy for stale `STARTED` records.
-
-**D. Focused test coverage is incomplete**
-
-No dedicated `ToolExecutor` or SQL tool-execution-store test module was found in the reviewed test tree.
-
-## 5. Tool Policies and Approval
-
-`AgentToolPolicy` currently contains:
-
-- `parallel_safe`
-- `requires_approval`
-
-`GetOrderTool`:
-
-- Does not require approval.
-- Is marked non-parallel-safe.
-
-`CancelOrderTool`:
-
-- Requires approval.
-- Is marked non-parallel-safe.
-
-Both tools currently perform Pydantic argument validation inside `execute()`.
-
-The executor supports sequential execution and a `TaskGroup` path when every tool in a batch declares itself parallel-safe.
-
-## 6. Idempotency and Downstream Command Boundary
-
-The application port is:
+Conceptually:
 
 ```text
-application/ports/order_commands.py
+Tool name
+    +
+Canonicalized arguments
+    |
+    v
+Intent representation
+    |
+    v
+SHA-256
+    |
+    v
+Intent hash
 ```
 
-Its port is named `OrderCommandGateway`.
+The purpose is to ensure that the same logical call identity is not reused for a different operation.
 
-The logical execution key is:
+### 9.3 Expected Behavior
+
+For a tool execution record:
+
+- If no record exists, claim the execution.
+- If a completed record exists with the same intent, replay its stored result.
+- If the same logical call has a different intent, reject the request.
+- If the previous execution is still started or its outcome is unknown, do not blindly execute it again.
+
+This protects against some duplicate execution scenarios.
+
+It does not provide end-to-end exactly-once execution.
+
+### 9.4 Important Limitation
+
+A local tool execution ledger cannot guarantee that a remote service performed a business operation exactly once.
+
+Consider:
 
 ```text
-{run_id}:{call_id}
+Local application
+      |
+      v
+Send cancellation request
+      |
+      v
+Remote service performs cancellation
+      |
+      v
+Network response is lost
+      |
+      v
+Local application sees timeout
 ```
 
-The key is carried in `CancelOrderCommand`.
+The local application cannot infer that cancellation failed.
 
-### Existing Adapters
+It may have succeeded remotely.
 
-**LocalOrderCommandGateway**
+This is why downstream idempotency and reconciliation are necessary.
 
-- Calls the in-process `OrderService`.
-- Uses `asyncio.to_thread()`.
-- Does not persist or enforce the command's idempotency key.
+## 10. Tool Execution Failure Model
 
-**GrpcOrderCommandGateway**
+The execution lifecycle must account for:
 
-- Implements the same application boundary.
-- Maps gRPC status codes to application integration errors.
-- Sends the idempotency key in the protobuf request.
+### 10.1 Failure Before Side Effect
 
-### Protobuf Contract
+The process fails before sending the downstream request.
 
-Source:
+The operation may be safe to retry, but the system must know that the request was never dispatched or have a reliable way to establish that fact.
+
+### 10.2 Failure During Side Effect
+
+The process or network fails while the downstream request is being processed.
+
+The outcome may be unknown.
+
+### 10.3 Failure After Side Effect
+
+The downstream operation succeeds, but the local process crashes before recording completion.
+
+The local ledger may still show `STARTED`.
+
+Blindly executing again can cause duplicate side effects.
+
+### 10.4 Recovery Requirement
+
+The system needs an explicit strategy for uncertain execution outcomes.
+
+Potential mechanisms include:
+
+- Downstream idempotency keys.
+- Operation status queries.
+- Reconciliation.
+- Durable downstream execution records.
+- Human intervention for unresolved cases.
+
+The exact strategy depends on the downstream service's capabilities.
+
+## 11. Human Approval
+
+Sensitive operations should be controlled by application policy.
+
+The historical Order Agent policy required approval for `CancelOrder`.
+
+The intended flow is:
 
 ```text
-contracts/proto/ai_backend_lab/contracts/order/v1/order_service.proto
+Agent Requests CancelOrder
+          |
+          v
+Tool Policy Check
+          |
+          v
+Approval Required
+          |
+          v
+Persist Waiting State
+          |
+          v
+Wait for Human Decision
+          |
+          v
+Resume Agent Run
+          |
+          v
+Execute Approved Operation
 ```
 
-The current contract defines one RPC:
+Approval must be tied to the relevant operation and execution context.
 
-```text
-OrderCommandService.CancelOrder
-```
+A resume request must not accidentally bypass the original approval requirement.
 
-Generated Python files are under:
+## 12. Order Command Gateway
 
-```text
-src/ai_backend_lab/contracts/order/v1/
-```
+The project introduced an `OrderCommandGateway` port.
 
-### Critical Runtime Wiring Fact
+Known implementations included:
 
-Although the gRPC adapter and contract exist, the current `composition.py` constructs `LocalOrderCommandGateway`.
+- `LocalOrderCommandGateway`
+- A gRPC adapter
 
-The current FastAPI lifespan creates and closes:
+### 12.1 LocalOrderCommandGateway
 
-- An HTTPX client.
-- An AsyncOpenAI client.
+The local adapter invokes the in-process Order service.
 
-It does not create a gRPC channel or stub.
+The historical implementation used `asyncio.to_thread()` for the synchronous operation.
 
-No downstream gRPC server implementation was found in the reviewed repository tree.
+This provides a local implementation behind the same application boundary.
 
-Therefore:
+It does not automatically provide distributed reliability or durable downstream idempotency.
 
-- A gRPC client adapter exists.
-- The active runtime path remains local.
-- Remote gRPC execution is not yet integrated end to end.
-- Downstream durable idempotency is not yet implemented in this repository.
+### 12.2 gRPC Adapter
 
-Do not describe these capabilities as completed.
+A Protobuf contract was present at:
 
-## 7. Other Infrastructure and API Components
+`contracts/proto/ai_backend_lab/contracts/order/v1/order_service.proto`
 
-Verified components include:
+It defined:
 
-- `OpenAILLMGateway` behind the `LLMGateway` port.
-- `HttpRiskGateway` behind the `RiskGateway` port.
-- HTTPX client usage.
-- SQLAlchemy engine and session factory.
-- Alembic migrations.
-- FastAPI lifespan ownership for HTTPX and OpenAI clients.
-- Request ID context middleware.
-- Request-ID-aware logging.
-- Centralized application exception mapping.
-- Request-validation error mapping.
+`OrderCommandService.CancelOrder`
 
-The `.env.example` contains placeholder configuration names for database, risk service, OpenAI, and Agent settings.
+Generated Python contract files were present under:
 
-Never copy real local `.env` values into documentation.
+`src/ai_backend_lab/contracts/order/v1/`
 
-## 8. Database Migrations
+The gRPC adapter propagated an idempotency-related key.
 
-The current migration tree contains migrations for:
+### 12.3 Historical Integration Status
 
-- Orders.
-- Internal order ID / order number changes.
-- `agent_runs`.
-- `tool_executions`.
+At the last known repository inspection:
 
-The test setup includes Alembic upgrade-to-head logic and guards intended to restrict integration tests to the `ai_backend_lab_test` database.
+- The `OrderCommandGateway` port existed.
+- The local adapter existed.
+- The gRPC adapter existed.
+- The Protobuf contract existed.
+- The application composition still selected `LocalOrderCommandGateway`.
+- The gRPC adapter was not wired into the FastAPI application composition.
+- The application lifespan did not manage a gRPC channel and stub.
+- A downstream gRPC server implementation was not present.
+- Durable downstream deduplication was not implemented.
 
-Do not change these guards casually.
+Therefore, the gRPC path was **partially implemented**, not a completed distributed command architecture.
 
-## 9. Tests and Verification Limits
+Re-inspect the current source before using this status.
 
-The current test tree contains API, application, domain, fake, and infrastructure tests.
+## 13. Application Lifecycle
 
-Examples include:
+External resources should be managed explicitly.
 
-- Agent API start/resume/get behavior.
-- Agent run service approval/resume behavior.
-- Agent run store round-trip behavior.
-- Agent run optimistic claim behavior.
-- Order repository and unit-of-work tests.
-- Risk gateway tests.
+Historically observed FastAPI lifespan responsibilities included:
 
-This was a remote, read-only source review.
+- Creating and closing the HTTPX client.
+- Creating and closing the asynchronous OpenAI client.
 
-The following were not run during this review:
+The historical snapshot did not show gRPC channel lifecycle management.
 
-- Pytest.
-- Ruff.
-- Black.
-- Type checking.
-- Application startup.
-- Database migrations.
+When gRPC integration is completed, resource management should be consistent with the application's lifecycle design.
 
-Test health is therefore unverified until checked locally.
+Do not create long-lived clients independently inside every request or tool call without a justified reason.
+
+## 14. Persistence and Database
+
+The project uses:
+
+- SQLAlchemy.
+- MySQL.
+- Alembic.
+
+Database schema changes should be represented through migrations.
+
+The test database observed in the historical snapshot was:
+
+`ai_backend_lab_test`
+
+The test configuration used Alembic upgrades to prepare the database.
+
+The current migration configuration and test setup must be verified before executing database commands.
+
+## 15. Testing Strategy
+
+Testing should cover multiple layers.
+
+### 15.1 Unit Tests
+
+Examples:
+
+- Domain behavior.
+- Tool input validation.
+- Intent fingerprint generation.
+- Tool policy.
+- Agent loop termination.
+- Error translation.
+
+### 15.2 Application Tests
+
+Examples:
+
+- Agent run lifecycle.
+- Approval behavior.
+- Resume behavior.
+- Tool execution orchestration.
+- Replay behavior.
+- Intent mismatch behavior.
+
+### 15.3 Persistence Tests
+
+Examples:
+
+- Tool execution uniqueness.
+- Transaction behavior.
+- Concurrent claims.
+- State transitions.
+- Migration correctness.
+
+### 15.4 Integration Tests
+
+Examples:
+
+- FastAPI endpoints.
+- MySQL persistence.
+- External gateway adapters.
+- LLM adapter behavior with controlled dependencies.
+- gRPC integration when fully wired.
+
+### 15.5 Failure and Concurrency Tests
+
+Examples:
+
+- Process interruption after claim.
+- Timeout after downstream success.
+- Duplicate tool call.
+- Same call ID with different arguments.
+- Concurrent resume.
+- Concurrent execution claims.
+- Unknown downstream outcome.
+- Recovery of stale execution records.
+
+A successful happy-path test is not enough to establish reliability.
+
+## 16. Known Historical Gaps and Risks
+
+The following issues were identified in the previous repository inspection.
+
+They must be rechecked against the current source.
+
+### 16.1 Validation After Execution Claim
+
+The tool-specific Pydantic validation in `GetOrderTool.execute()` and `CancelOrderTool.execute()` was observed to occur after the execution had been claimed as `STARTED`.
+
+This creates a risk:
+
+1. The executor records `STARTED`.
+2. Tool-specific validation fails.
+3. No side effect occurs.
+4. The record may remain `STARTED`.
+
+The intended improvement is to validate tool arguments before claiming the execution record, or otherwise define a safe validation-failure state transition.
+
+### 16.2 Incomplete UNKNOWN Lifecycle
+
+The historical `ToolExecutionStore` exposed operations equivalent to:
+
+- `get`
+- `create`
+- `complete`
+
+A clear `mark UNKNOWN` transition and reconciliation workflow were not found in the inspected implementation.
+
+### 16.3 No Complete Crash Recovery
+
+The historical implementation did not provide a complete recovery process for interrupted Agent runs.
+
+A process crash could leave a run in `RUNNING`.
+
+A tool execution could remain `STARTED`.
+
+### 16.4 Limited Tool Execution Test Coverage
+
+The historical inspection did not find a dedicated ToolExecutor test module or a dedicated SQL ToolExecutionStore test module.
+
+This must be verified against the current repository.
+
+### 16.5 gRPC Integration Incomplete
+
+The gRPC adapter and contract existed, but the complete runtime and downstream service integration were not present in the inspected snapshot.
+
+### 16.6 Exactly-once Is Not Guaranteed
+
+The current local ledger design cannot independently guarantee exactly-once execution across service boundaries.
+
+A durable downstream idempotency mechanism and reconciliation strategy are required.
+
+## 17. Architecture Evolution Direction
+
+The architecture should evolve in the following order:
+
+1. Complete and verify the existing tool execution ledger.
+2. Make validation and execution claiming safe.
+3. Define explicit uncertain-outcome transitions.
+4. Add reconciliation.
+5. Add downstream idempotency.
+6. Implement reliable recovery for interrupted runs.
+7. Complete approval and resume reliability.
+8. Improve audit and observability.
+9. Complete distributed gateway integration.
+10. Add failure and concurrency testing.
+11. Evaluate distributed Agent execution only after the single-process reliability model is clear.
+
+This sequence is a technical direction, not authorization to change the repository.
+
+## 18. Final Architecture Rule
+
+Always distinguish between:
+
+- A concept explained in the curriculum.
+- An interface defined in code.
+- An adapter implemented in code.
+- An adapter wired into runtime composition.
+- An external service actually available.
+- A behavior covered by tests.
+- A behavior verified under failure conditions.
+
+These are different levels of completion.
