@@ -19,6 +19,7 @@ from ai_backend_lab.application.order_agent.service import (
     OrderAgentService,
 )
 from ai_backend_lab.application.order_agent.tools import (
+    AgentToolContext,
     AgentToolPolicy,
 )
 from ai_backend_lab.application.ports.llm import (
@@ -28,6 +29,7 @@ from ai_backend_lab.application.ports.llm import (
     LLMUsage,
 )
 from tests.fakes.llm import FakeLLMGateway
+from tests.fakes.tool_execution_store import FakeToolExecutionStore
 
 
 class FakeAgentTool:
@@ -72,6 +74,7 @@ class FakeAgentTool:
     async def execute(
         self,
         arguments: str,
+        context: AgentToolContext,
     ) -> str:
         self.executed_arguments.append(arguments)
 
@@ -94,7 +97,10 @@ async def test_agent_returns_direct_answer() -> None:
 
     registry = ToolRegistry(tools=[])
 
-    executor = ToolExecutor(registry=registry)
+    executor = ToolExecutor(
+        registry=registry,
+        execution_store=FakeToolExecutionStore(),
+    )
 
     agent = OrderAgentService(
         llm=llm,
@@ -103,7 +109,7 @@ async def test_agent_returns_direct_answer() -> None:
         max_steps=6,
     )
 
-    result = await agent.run("Hello!")
+    result = await agent.run(run_id="run-001", user_message="Hello!")
 
     assert isinstance(
         result,
@@ -142,6 +148,7 @@ async def test_agent_executes_tool_and_returns_final_answer() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
     llm = FakeLLMGateway(
         results=[
@@ -167,7 +174,9 @@ async def test_agent_executes_tool_and_returns_final_answer() -> None:
         executor=executor,
         max_steps=6,
     )
-    result = await agent.run("What is the status of ORD-001?")
+    result = await agent.run(
+        run_id="run-001", user_message="What is the status of ORD-001?"
+    )
 
     assert isinstance(
         result,
@@ -219,6 +228,7 @@ async def test_agent_runs_multiple_tool_steps() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
     llm = FakeLLMGateway(
         results=[
@@ -255,7 +265,9 @@ async def test_agent_runs_multiple_tool_steps() -> None:
         executor=executor,
         max_steps=6,
     )
-    result = await agent.run("Check ORD-001 and ORD-002.")
+    result = await agent.run(
+        run_id="run-001", user_message="Check ORD-001 and ORD-002."
+    )
     assert isinstance(
         result,
         AgentResult,
@@ -300,6 +312,7 @@ async def test_agent_stops_when_max_steps_exceeded() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -337,7 +350,7 @@ async def test_agent_stops_when_max_steps_exceeded() -> None:
     )
 
     with pytest.raises(AgentMaxStepsExceededError):
-        await agent.run("Keep checking orders.")
+        await agent.run(run_id="run-001", user_message="Keep checking orders.")
 
     assert tool.executed_arguments == ['{"order_number":"ORD-001"}']
 
@@ -360,6 +373,7 @@ async def test_agent_pauses_before_tool_that_requires_approval() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -385,7 +399,7 @@ async def test_agent_pauses_before_tool_that_requires_approval() -> None:
         max_steps=6,
     )
 
-    result = await agent.run("Cancel ORD-001.")
+    result = await agent.run(run_id="run-001", user_message="Cancel ORD-001.")
 
     assert isinstance(
         result,
@@ -432,6 +446,7 @@ async def test_agent_resumes_after_approval() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -460,7 +475,7 @@ async def test_agent_resumes_after_approval() -> None:
         max_steps=6,
     )
 
-    paused = await agent.run("Cancel ORD-001.")
+    paused = await agent.run(run_id="run-001", user_message="Cancel ORD-001.")
     assert isinstance(
         paused,
         AgentApprovalResult,
@@ -526,6 +541,7 @@ async def test_agent_turns_rejection_into_observation() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -554,7 +570,7 @@ async def test_agent_turns_rejection_into_observation() -> None:
         max_steps=6,
     )
 
-    paused = await agent.run("Cancel ORD-001.")
+    paused = await agent.run(run_id="run-001", user_message="Cancel ORD-001.")
 
     assert isinstance(
         paused,
@@ -609,7 +625,10 @@ async def test_agent_turns_rejection_into_observation() -> None:
 async def test_agent_reuses_conversation_history() -> None:
     registry = ToolRegistry(tools=[])
 
-    executor = ToolExecutor(registry=registry)
+    executor = ToolExecutor(
+        registry=registry,
+        execution_store=FakeToolExecutionStore(),
+    )
 
     llm = FakeLLMGateway(
         results=[
@@ -629,7 +648,9 @@ async def test_agent_reuses_conversation_history() -> None:
         max_steps=6,
     )
 
-    first_result = await agent.run("What is the status of ORD-001?")
+    first_result = await agent.run(
+        run_id="run-001", user_message="What is the status of ORD-001?"
+    )
 
     assert isinstance(
         first_result,
@@ -644,7 +665,8 @@ async def test_agent_reuses_conversation_history() -> None:
     assert first_result.conversation.messages[1].content == "ORD-001 is pending."
 
     second_result = await agent.run(
-        "Do you remember it?",
+        run_id="run-002",
+        user_message="Do you remember it?",
         conversation=(first_result.conversation),
     )
 
