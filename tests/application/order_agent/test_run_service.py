@@ -27,6 +27,7 @@ from ai_backend_lab.application.order_agent.service import (
     OrderAgentService,
 )
 from ai_backend_lab.application.order_agent.tools import (
+    AgentToolContext,
     AgentToolPolicy,
 )
 from ai_backend_lab.application.ports.llm import (
@@ -35,6 +36,7 @@ from ai_backend_lab.application.ports.llm import (
     LLMToolDefinition,
 )
 from tests.fakes.llm import FakeLLMGateway
+from tests.fakes.tool_execution_store import FakeToolExecutionStore
 
 
 class FakeAgentRunStore:
@@ -131,6 +133,7 @@ class FakeApprovalTool:
     async def execute(
         self,
         arguments: str,
+        context: AgentToolContext,
     ) -> str:
         self.executed_arguments.append(arguments)
 
@@ -149,6 +152,7 @@ async def test_start_persists_waiting_for_approval() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -220,6 +224,7 @@ async def test_resume_loads_checkpoint_and_completes_run() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(
@@ -308,6 +313,7 @@ async def test_completed_run_cannot_be_resumed_again() -> None:
 
     executor = ToolExecutor(
         registry=registry,
+        execution_store=FakeToolExecutionStore(),
     )
 
     llm = FakeLLMGateway(

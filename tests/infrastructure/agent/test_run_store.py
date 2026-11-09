@@ -65,6 +65,7 @@ async def test_agent_run_store_round_trip(
     )
 
     state = AgentState(
+        run_id="run-test-001",
         user_message="Cancel ORD-001.",
         conversation=conversation,
         steps=[
@@ -138,6 +139,8 @@ async def test_agent_run_store_round_trip(
     assert loaded.state.trace.tool_calls == 1
 
     assert loaded.state.trace.input_tokens == 100
+
+    assert loaded.state.run_id == "run-test-001"
 
     assert loaded.state.trace.output_tokens == 20
 

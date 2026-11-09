@@ -140,6 +140,7 @@ def test_start_agent_run_returns_approval_request(
     client: TestClient,
 ) -> None:
     state = AgentState(
+        run_id="run-002",
         user_message="Cancel ORD-001.",
         conversation=ConversationState(),
     )
