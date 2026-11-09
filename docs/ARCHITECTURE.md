@@ -16,7 +16,161 @@ It is intended to help contributors understand:
 
 This document must be updated when the actual architecture changes.
 
-**Important:** Implementation descriptions below are based on a historical repository inspection. Re-inspect the current source before treating any detail as current.
+**Important:** Section 1A below was verified against the source code on 2026-11-08 (commit `86450b7`). The remaining sections (2 onward) are based on an earlier historical inspection and design intent. Re-inspect the current source before treating any detail in them as current.
+
+## 1A. Verified Architecture Snapshot (2026-11-08)
+
+**Basis:** source inspection at commit `86450b7`. The full test suite (70 tests, run against the `ai_backend_lab_test` MySQL database) passed on 2026-11-08. Day 11.7a (commit `fcab344`) then added unit tests for `GrpcOrderCommandGateway` and a narrow `OrderCommandStub` Protocol; the suite is now 77 tests, all passing. The gateway is still not wired into the composition root. Statements below describe what the code does, not what is planned.
+
+### 1A.1 Layer map
+
+```text
+                         HTTP request
+                              |
++-----------------------------v------------------------------+
+| api/        FastAPI: routers, schemas, exception handlers, |
+|             dependency injection, lifespan                  |
+|   app.py . dependencies.py . routers/ . schemas/ . errors  |
++-----------------------------+------------------------------+
+                              | builds the object graph via
++-----------------------------v------------------------------+
+| composition.py   composition root: build_*() wires          |
+|                  implementations to ports                   |
++-----------------------------+------------------------------+
+         +--------------------+--------------------+
+         v                    v                    v
++----------------+  +------------------+  +----------------+
+| application/   |  | application/     |  | domain/        |
+| order_agent/   |  | services.py      |  | Order          |
+| (Agent runtime)|  | order_assistant/ |  | OrderStatus    |
++-------+--------+  +--------+---------+  +----------------+
+        | depends only on ports (Protocol)
+        v
++----------------------------------------------------------+
+| application/ports/  LLMGateway . RiskGateway .            |
+|   OrderCommandGateway . UnitOfWork . repositories ...     |
++---------------------------^------------------------------+
+                            | implemented by
++---------------------------+------------------------------+
+| infrastructure/                                           |
+|   llm/gateway.py (OpenAI)        risk.py (HTTPX)          |
+|   order_commands/{local,grpc}.py                          |
+|   database/ (SQLAlchemy models, repositories, UoW, engine)|
+|   agent/{run_store, tool_execution_store, state_serializer}|
++----------------------------------------------------------+
+Cross-cutting: observability/ (request id context, logging,
+               middleware) . config.py (environment settings)
+```
+
+### 1A.2 Package responsibilities
+
+| Layer | Location | Responsibility | Must not |
+|---|---|---|---|
+| Domain | `domain/` | `Order`, `OrderStatus`, cancellation rules (`can_be_cancelled`, `cancel()`), domain exceptions | Know about databases, HTTP, or LLMs |
+| Ports | `application/ports/` | `Protocol` interfaces describing what the application needs | Contain implementations |
+| Order use cases | `application/services.py` | `OrderService`: query, create, cancel orders; transactions through `UnitOfWork` | Know about HTTP |
+| Agent runtime | `application/order_agent/` | See 1A.4 | Depend on the OpenAI SDK or SQLAlchemy |
+| Order assistant | `application/order_assistant/` | The Day 9 single-pass LLM-with-tools feature; its tool definitions are reused by the Agent tools | — |
+| Infrastructure | `infrastructure/` | Concrete implementations of ports | Contain business decisions |
+| API | `api/` | Parse requests, call the application layer, translate results and errors to HTTP | Contain business workflows |
+| Composition root | `composition.py` | Decide which implementation backs each port | Contain logic |
+
+Generated gRPC code lives in `src/ai_backend_lab/contracts/order/v1/`; the `.proto` source is at `contracts/proto/ai_backend_lab/contracts/order/v1/order_service.proto`.
+
+### 1A.3 Dependency rule (verified)
+
+- No module under `application/` or `domain/` imports from `infrastructure/`.
+- `domain/` does not import from `application/`.
+- Within `api/`, only `app.py` and `dependencies.py` import from `infrastructure/`.
+
+### 1A.4 Agent runtime components
+
+```text
+AgentRunService (run_service.py)      lifecycle and persistence of one run
+   |  start / resume / get; writes agent_runs; optimistic locking by version
+   v
+OrderAgentService (service.py)        the Agent loop
+   |  _continue(): loop {
+   |     call LLM
+   |     no tool calls        -> complete
+   |     step budget exceeded -> AgentMaxStepsExceededError
+   |     approval required    -> return AgentApprovalResult (pause)
+   |     execute tools, feed outputs back to the LLM }
+   v
+ToolExecutor (executor.py)            safe execution of one tool call
+   |  resolve tool -> compute intent_hash -> look up ledger
+   |  -> claim (STARTED) -> execute -> complete (COMPLETED)
+   |-- ToolRegistry (registry.py): tool name -> tool
+   |-- ToolExecutionStore (port) -> SqlAlchemyToolExecutionStore -> tool_executions
+   v
+AgentTool (tools.py): GetOrderTool, CancelOrderTool
+   '-- CancelOrderTool -> OrderCommandGateway (port) -> Local | gRPC
+```
+
+| Component | Question it answers | Persisted in |
+|---|---|---|
+| `AgentRunService` | What state is this run in? Can it be resumed? | `agent_runs` (serialized `AgentState`, `version`) |
+| `OrderAgentService` | Should the next step be an LLM call or a tool call? | Nothing; mutates `AgentState` in memory |
+| `ToolExecutor` | Has this tool call been made before? What was its result? | `tool_executions`, key `(run_id, call_id)` |
+
+**Run status** (`AgentRunStatus`): `RUNNING`, `WAITING_FOR_APPROVAL`, `COMPLETED`, `FAILED`.
+Normal path: `RUNNING -> WAITING_FOR_APPROVAL -> RUNNING -> COMPLETED`; failures go to `FAILED`.
+
+**Tool execution status** (`ToolExecutionStatus`): `STARTED`, `COMPLETED`, `UNKNOWN`. No code currently writes `UNKNOWN` (see 1A.9).
+
+### 1A.5 Request flow: `POST /agent/runs` with an approval-required tool
+
+1. `routers/order_agent.py::start_agent_run` is invoked; FastAPI resolves `AgentRunServiceDep`.
+2. `dependencies.get_agent_run_service` reads the shared `AsyncOpenAI` and `httpx.AsyncClient` from `request.app.state` and calls `composition.build_agent_run_service(...)`. **The business object graph (services, registry, executor, stores) is rebuilt for every request; only the long-lived clients are shared.**
+3. `AgentRunService.start` generates `run_<uuid>` and inserts an `agent_runs` row (`RUNNING`, version 1).
+4. `OrderAgentService.run` enters the loop. The LLM requests `cancel_order`, whose policy has `requires_approval=True`, so nothing is executed and an `AgentApprovalResult` is returned.
+5. `AgentRunService` serializes the `AgentState` into the checkpoint and sets the status to `WAITING_FOR_APPROVAL`.
+6. The router converts the result to JSON, listing the pending approval requests.
+
+**Resume** (`POST /agent/runs/{run_id}/resume`): `claim_for_resume(expected_version)` first (optimistic lock, so two concurrent requests cannot resume the same run), then `OrderAgentService.resume` -> `ToolExecutor.execute_resolved`. Only at this point does the ledger claim and the side effect happen. The source carries the comment "claim before executing any side-effect tool".
+
+### 1A.6 Persistence
+
+| Table | Primary key | Key columns |
+|---|---|---|
+| `orders` | `id` (auto-increment); `order_number` unique | customer, amount, status |
+| `agent_runs` | `run_id` | `status`, `state` (JSON), `answer`, `version`, timestamps |
+| `tool_executions` | `(run_id, call_id)` | `tool_name`, `intent_hash`, `status`, `output`, timestamps |
+
+Migrations are in `alembic/versions/`.
+
+### 1A.7 Synchronous and asynchronous code
+
+- `OrderService` and the unit of work are **synchronous** (synchronous SQLAlchemy `Session`).
+- The Agent runtime is **asynchronous**.
+- The bridge is `asyncio.to_thread(...)`, used by `LocalOrderCommandGateway`, `SqlAlchemyAgentRunStore`, `SqlAlchemyToolExecutionStore`, and `GetOrderTool`.
+- `GrpcOrderCommandGateway` is natively asynchronous (`grpc.aio`) and does not use threads.
+
+### 1A.8 Lifecycle and configuration
+
+- `api/app.py::lifespan` creates the `httpx.AsyncClient` and `AsyncOpenAI` client (through `AsyncExitStack`), stores them on `app.state`, and closes them on shutdown; `engine.dispose()` runs in `finally`.
+- **No gRPC channel or stub is created or managed there.**
+- `config.py::load_settings()` reads environment variables. `observability/` provides the request-id middleware and logging.
+- `main.py` is entirely commented out and unused; the application object is `app` in `api/app.py`. The exact server launch command has not been verified.
+
+### 1A.9 Implementation status
+
+| Capability | Status |
+|---|---|
+| Layering, ports and adapters, composition root | Implemented |
+| Agent loop, approval pause/resume, optimistic locking | Implemented, tested |
+| Tool execution ledger (claim, replay, intent conflict) | Implemented; no dedicated ToolExecutor or SQL store tests yet |
+| Writing `UNKNOWN`, reconciliation, stale-run recovery | Not implemented |
+| `GrpcOrderCommandGateway` and Protobuf contract | Implemented; **not wired into `composition.py` or the lifespan** (composition uses `LocalOrderCommandGateway`) |
+| Downstream gRPC server and durable downstream deduplication | Not implemented |
+
+### 1A.10 Known gaps verified in source
+
+1. **Validation after claim.** `GetOrderTool.execute` and `CancelOrderTool.execute` validate their arguments with Pydantic after `ToolExecutor` has already created the `STARTED` record.
+2. **Exceptions leave `STARTED`.** If `tool.execute()` raises, `ToolExecutor` never calls `complete()`, so the record stays `STARTED`. `CancelOrderTool` only catches `OrderCommandNotFoundError` and `OrderCommandRejectedError`; gRPC timeout or unavailability errors (`OrderCommandIntegrationError` subclasses) would propagate. This is latent with the local gateway and becomes real once gRPC is wired in.
+3. **Local gateway ignores the idempotency key.** `LocalOrderCommandGateway` does not use `idempotency_key`. Cancelling an already cancelled order raises `OrderCannotBeCancelledError`, which becomes `OrderCommandRejectedError`, so a replayed cancellation is reported as "cannot be cancelled" instead of returning the original success.
+4. **Checkpoint schema evolution.** `AgentState` gained a required `run_id`; checkpoints persisted before that change cannot be deserialized.
+5. **Per-request object graph.** Services are rebuilt on every request; any new long-lived resource (such as a gRPC channel) must live on `app.state` and be passed through `dependencies.py` into `composition.py`.
 
 ## 2. Architectural Principles
 
