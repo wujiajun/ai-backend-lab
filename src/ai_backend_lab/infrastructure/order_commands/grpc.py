@@ -1,3 +1,5 @@
+from typing import Never, Protocol
+
 import grpc
 
 from ai_backend_lab.application.ports.order_commands import (
@@ -10,18 +12,24 @@ from ai_backend_lab.application.ports.order_commands import (
     OrderCommandTimeoutError,
     OrderCommandUnavailableError,
 )
-from ai_backend_lab.contracts.order.v1 import (
-    order_service_pb2,
-    order_service_pb2_grpc,
-)
+from ai_backend_lab.contracts.order.v1 import order_service_pb2
 
-from typing import Never
+
+class OrderCommandStub(Protocol):
+    """The part of the generated OrderCommandService stub this gateway uses."""
+
+    async def CancelOrder(
+        self,
+        request: order_service_pb2.CancelOrderRequest,
+        *,
+        timeout: float,
+    ) -> order_service_pb2.CancelOrderResponse: ...
 
 
 class GrpcOrderCommandGateway(OrderCommandGateway):
     def __init__(
         self,
-        stub: order_service_pb2_grpc.OrderCommandServiceStub,
+        stub: OrderCommandStub,
         timeout_seconds: float,
     ) -> None:
         self._stub = stub
