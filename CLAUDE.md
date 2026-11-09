@@ -391,6 +391,7 @@ Keep the following documents consistent:
 - `docs/HANDOFF.md`: current handoff state and next actions.
 - `docs/LEARNING_HISTORY.md`: historical learning curriculum and progress.
 - `docs/DECISIONS.md`: architecture decisions and their rationale.
+- `docs/COLLABORATION_RULES.md`: agreed teaching style, lesson format, and communication rules. Read it at the start of every session and keep it updated when rules change.
 
 Do not duplicate the entire learning history in the roadmap.
 

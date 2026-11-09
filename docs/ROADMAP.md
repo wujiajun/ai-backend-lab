@@ -364,9 +364,9 @@ The intended principle is that invalid input should not create a misleading reco
 
 The following are candidate future development phases.
 
-They are not historical Day 12 lesson records, and their detailed numbering has not yet been established.
+They are not historical Day 12 lesson records. The Day 12+ numbering was agreed on 2026-11-08 and is defined in Section 11, which supersedes the Phase A–F ordering below. Phases A–F remain as a topic pool.
 
-Do not invent Day 12.x or later numbering without agreement.
+Do not invent Day 12.x or later numbering beyond Section 11 without agreement.
 
 ### Phase A — Complete the Agent Runtime Reliability Foundation
 
@@ -480,3 +480,64 @@ When updating this document:
 - Keep future phases separate from confirmed curriculum items.
 
 The roadmap is a controlled engineering plan, not a list of speculative features.
+
+## 11. Agreed Lesson Plan (2026-11-08)
+
+This section is the agreed plan between the user and Claude. It re-slices Day 11 into commit-sized lessons (each about 1–2 hours) and defines Day 12–22. Historical lesson numbers and Section 6 topics are preserved. Sub-lessons use a/b/c suffixes.
+
+Reasoning: reliability work needs test protection first, and RAG, MCP, and evaluation are common requirements for Python Agent roles, so they come right after the reliability core. The Day 11.10–11.12 scope is intentionally kept minimal.
+
+### 11.1 Day 11 (remaining)
+
+| Lesson | Content |
+|---|---|
+| 11.6f | Repair 13 stale tests (11 missing `execution_store`, 2 missing `run_id`); Fake vs Mock; document `TEST_DATABASE_URL` |
+| 11.7a | Read `OrderCommandGateway`, Local and gRPC adapters; `grpc.aio` execution model |
+| 11.7b | gRPC channel/stub in FastAPI lifespan; Local/gRPC configuration switch |
+| 11.8a | Validate tool arguments before the execution claim (ADR-015) |
+| 11.8b | Execution state machine: `UNKNOWN`, `FAILED`; handling tool exceptions |
+| 11.8c | Concurrent claim tests on real MySQL |
+| 11.9a | Minimal downstream gRPC server |
+| 11.9b | Downstream durable dedup table; intent mismatch rejection; replay |
+| 11.9c | End-to-end: timeout after downstream success, reconciliation |
+| 11.10a | Stale `RUNNING`/`STARTED` detection; lease design |
+| 11.10b | Single-process recovery flow |
+| 11.11a/b | Retry policy |
+| 11.12 | Minimal audit events and structured logging |
+| 11.13a/b | Failure and concurrency tests |
+| 11.14 | Resilient cancel flow |
+| 11.15 | Day 11 wrap-up; resume "can say / cannot say" list |
+
+### 11.2 Day 12–22
+
+Each Day is expected to take about 8–12 lessons; detailed lessons are defined when the Day starts.
+
+| Day | Topic |
+|---|---|
+| 12 | Streaming and background execution: SSE, async runs, worker process, MySQL `SKIP LOCKED` job claim, heartbeat |
+| 13 | RAG: chunking, embeddings, vector store, retrieval tool, citations, injection risk in retrieved content |
+| 14 | Memory and context management: token budget, summarization, long-term memory |
+| 15 | MCP and tool ecosystem: MCP server for order tools, Agent as MCP client, schema from Pydantic |
+| 16 | Evaluation: golden dataset, eval harness, LLM-as-judge, LLM record/replay, cost regression |
+| 17 | Observability: OpenTelemetry traces, metrics, LLM cost and latency |
+| 18 | Security and governance: authn/authz, multi-tenancy, tool allowlist, prompt injection, PII, approval records |
+| 19 | Multi-agent and workflows |
+| 20 | Framework comparison: rebuild the Order Agent with LangGraph; compare trade-offs |
+| 21 | Production deployment: Docker Compose, CI, health checks, graceful shutdown, load test |
+| 22 | Wrap-up: interview material, own Agent project kickoff |
+
+### 11.3 Milestones
+
+- Milestone A (end of Day 16, roughly 3.5 months at 1–2 hours/day): resume-ready.
+- Day 17–22: depth and differentiation.
+
+These are rough estimates and will be adjusted to the actual pace.
+
+### 11.4 Open decisions (decide when reached)
+
+- Day 12: job queue on MySQL only, or add Redis. Current preference: MySQL only.
+- Day 13: vector store choice (Qdrant or pgvector); adds a new component.
+
+### 11.5 Change rule
+
+Reordering or adding lessons requires the user's agreement, and the change must be logged in `docs/COLLABORATION_RULES.md`.
